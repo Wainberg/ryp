@@ -547,7 +547,7 @@ p_value
 # 0.02831035772841884
 ```
 
-3. Recursive conversion, showcasing all the keyword arguments to `to_r()` and
+3. Recursive conversion, showcasing all the keyword arguments of `to_r()` and
    `to_py()`:
 
 ```python
