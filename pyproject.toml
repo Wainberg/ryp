@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ryp"
+version = "0.1.0"
+dependencies = ["cffi", "pyarrow"]
+requires-python = ">=3.7"
+authors = [{name = "Michael Wainberg", email = "m.wainberg@utoronto.ca"}]
+description = "R inside Python"
+readme = "README.md"
+license = {text = "MIT License"}
+keywords = ["R", "rpy2", "reticulate", "tidyverse", "ggplot", "ggplot2", "arrow"]
+classifiers = [
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.7",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering",
+  "Topic :: Software Development",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/Wainberg/ryp"
+"Bug Tracker" = "https://github.com/Wainberg/ryp/issues"
