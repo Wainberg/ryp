@@ -91,7 +91,7 @@ ryp consists of just three core functions:
 and two more functions, `get_config()` and `set_config()`, for getting and 
 setting ryp's global configuration options.
 
-### 1. `r()`
+### `r()`
 
 ```python
 r(R_code: str = ...) -> None
@@ -128,7 +128,7 @@ Note that the default value for `R_code` is the special sentinel value `...`
 the terminal when passing a variable that is supposed to be a string but is 
 unexpectedly `None`.
 
-### 2. `to_r()`
+### `to_r()`
 
 ```python
 to_r(python_object: object, R_variable_name: str, *, 
@@ -189,7 +189,7 @@ rownames). `colnames` cannot be specified unless `python_object` is a
 multidimensional NumPy array or scipy sparse array or matrix, or something that
 might contain one (`list`, `tuple`, or `dict`).
 
-### 3. `to_py()`
+### `to_py()`
 
 ```python
 to_py(R_statement: str, *,
@@ -486,35 +486,23 @@ scalar `datetime.timedelta` values (which cannot represent nanoseconds).
 1. Apply R's `scale()` function to a pandas DataFrame:
 
 ```python
->> > import pandas as pd
->> > from ryp.ryp.ryp import r, to_py, to_r, set_config
->> > set_config(to_py_format='pandas')
->> > data = pd.DataFrame({'a': [1, 2, 3], 'b': [1, 3, 4]})
->> > to_r(data, 'data')  # convert the pandas DataFrame to R
->> > r('data')
-a
-b
-1
-1
-1
-2
-2
-3
-3
-3
-4
->> > r('data <- scale(data)')  # scale the R data.frame
->> > scaled_data = to_py('data')  # convert the R data.frame to Python
->> > scaled_data
-a
-b
-0 - 1.0 - 1.091089
-1
-0.0
-0.218218
-2
-1.0
-0.872872
+>>> import pandas as pd
+>>> from ryp import r, to_py, to_r, set_config
+>>> set_config(to_py_format='pandas')
+>>> data = pd.DataFrame({'a': [1, 2, 3], 'b': [1, 3, 4]})
+>>> to_r(data, 'data')
+>>> r('data')
+  a b
+1 1 1
+2 2 3
+3 3 4
+>>> r('data <- scale(data)')  # scale the R data.frame
+>>> scaled_data = to_py('data')  # convert the R data.frame to Python
+>>> scaled_data
+     a         b
+0 -1.0 -1.091089
+1  0.0  0.218218
+2  1.0  0.872872
 ```
 Note: we could have just written `to_py('scale(data)')` instead of
 `r('data <- scale(data)')` followed by `to_py('data')`.
@@ -522,14 +510,14 @@ Note: we could have just written `to_py('scale(data)')` instead of
 2. Run a linear model on a polars DataFrame:
 
 ```python
->> > import polars as pl
->> > from ryp.ryp.ryp import r, to_py, to_r
->> > data = pl.DataFrame({'y': [7, 1, 2, 3, 6], 'x': [5, 2, 3, 2, 5]})
->> > to_r(data, 'data')
->> > r('model <- lm(y ~ x, data=data)')
->> > coef = to_py('summary(model)$coefficients', index='variable')
->> > p_value = coef.filter(variable='x').select('Pr(>|t|)')[0, 0]
->> > p_value
+>>> import polars as pl
+>>> from ryp import r, to_py, to_r
+>>> data = pl.DataFrame({'y': [7, 1, 2, 3, 6], 'x': [5, 2, 3, 2, 5]})
+>>> to_r(data, 'data')
+>>> r('model <- lm(y ~ x, data=data)')
+>>> coef = to_py('summary(model)$coefficients', index='variable')
+>>> p_value = coef.filter(variable='x').select('Pr(>|t|)')[0, 0]
+>>> p_value
 0.02831035772841884
 ```
 
@@ -537,46 +525,31 @@ Note: we could have just written `to_py('scale(data)')` instead of
    `to_py()`:
 
 ```python
->> > import numpy as np
->> > from ryp.ryp.ryp import r, to_py, to_r
->> > arrs = {'ints': np.array([[1, 2], [3, 4]]),
-             ...         'floats': np.array([[0.5, 1.5], [2.5, 3.5]])}
->> > to_r(arrs, 'arrs', format='data.frame',
-          ...
-rownames = ['row1', 'row2'], colnames = ['col1', 'col2'])
->> > r('arrs')
+>>> import numpy as np
+>>> from ryp import r, to_py, to_r
+>>> arrays = {'ints': np.array([[1, 2], [3, 4]]),
+...           'floats': np.array([[0.5, 1.5], [2.5, 3.5]])}
+>>> to_r(arrays, 'arrays', format='data.frame',
+...      rownames = ['row1', 'row2'], colnames = ['col1', 'col2'])
+>>> r('arrays')
 $ints
-col1
-col2
-row1
-1
-2
-row2
-3
-4
+     col1 col2
+row1    1    2
+row2    3    4
 
 $floats
-col1
-col2
-row1
-0.5
-1.5
-row2
-2.5
-3.5
-
->> > to_py('arrs', format='pandas', index='foo')
-{'ints': col1  col2
-  foo
- row1     1     2
-   row2     3     4, 'floats': col1  col2
-   foo
- row1   0.5   1.5
-   row2   2.5   3.5}
->> > to_py('arrs$floats[1, 1]', squeeze=False)
-shape: (1,)
-Series: 'floats[1, 1])'[f64]
-[
-  0.5
-]
+     col1 col2
+row1  0.5  1.5
+row2  2.5  3.5
+>>> arrays = to_py('arrays', format='pandas', index='foo')
+>>> arrays['ints']
+      col1  col2
+foo
+row1     1     2
+row2     3     4
+>>> arrays['floats']
+      col1  col2
+foo
+row1   0.5   1.5
+row2   2.5   3.5
 ```
