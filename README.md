@@ -110,15 +110,15 @@ and variables defined in the R terminal will be available from Python once you
 exit:
 
 ```python
->> > from ryp.ryp.ryp import r
->> > r('a = 1')
->> > r()
+>>> from ryp import r
+>>> r('a = 1')
+>>> r()
 > a
 [1]
 1
 > b < - 2
 >
->> > r('b')
+>>> r('b')
 [1]
 2
 ```
