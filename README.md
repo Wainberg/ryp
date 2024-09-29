@@ -511,8 +511,7 @@ scalar `datetime.timedelta` values (which cannot represent nanoseconds).
 
 ```python
 import pandas as pd
-from ryp import r, to_py, to_r, set_config
-set_config(to_py_format='pandas')
+from ryp import r, to_py, to_r
 data = pd.DataFrame({'a': [1, 2, 3], 'b': [1, 3, 4]})
 to_r(data, 'data')
 r('data')
@@ -522,7 +521,7 @@ r('data')
 # 3 3 4
 
 r('data <- scale(data)')  # scale the R data.frame
-scaled_data = to_py('data')  # convert the R data.frame to Python
+scaled_data = to_py('data', format='pandas')  # convert the R data.frame to Python
 scaled_data
 #      a         b
 # 0 -1.0 -1.091089
@@ -530,7 +529,9 @@ scaled_data
 # 2  1.0  0.872872
 ```
 Note: we could have just written `to_py('scale(data)')` instead of
-`r('data <- scale(data)')` followed by `to_py('data')`.
+`r('data <- scale(data)')` followed by `to_py('data')`. We could also have 
+run `set_config(to_py_format='pandas')` at the top, to avoid having to specify
+`format='pandas'` in each `to_py()` call.
 
 2. Run a linear model on a polars DataFrame:
 
