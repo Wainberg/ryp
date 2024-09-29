@@ -26,6 +26,30 @@ ryp does the opposite of the
 [reticulate](https://rstudio.github.io/reticulate) R library, which runs Python
 inside R.
 
+## Table of Contents
+
+- [Installation](#installation)
+- [Functionality](#functionality)
+  - [`r()`](#r)
+  - [`to_r()`](#to_r)
+    - [The `format` argument](#the-format-argument)
+    - [The `rownames` and `colnames` arguments](#the-rownames-and-colnames-arguments)
+  - [`to_py()`](#to_py)
+    - [The `format` argument](#the-format-argument-1)
+    - [The `index` argument](#the-index-argument)
+    - [The `squeeze` argument](#the-squeeze-argument)
+  - [`set_config()` and `get_config()`](#set_config-and-get_config)
+- [Conversion rules](#conversion-rules)
+  - [Python to R (`to_r()`)](#python-to-r-tor)
+    - [NumPy data types](#numpy-data-types)
+    - [pandas-specific data types](#pandas-specific-data-types)
+    - [pandas Arrow data types (`pd.ArrowDtype`)](#pandas-arrow-data-types-pdarrowdtype)
+    - [Polars data types](#polars-data-types)
+    - [Notes](#notes)
+  - [R to Python (`to_py()`)](#r-to-python-topy)
+    - [Data types](#data-types)
+- [Examples](#examples)
+
 ## Installation
 
 Install ryp via pip:
