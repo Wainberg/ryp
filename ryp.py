@@ -298,7 +298,7 @@ def _initialize_R() -> tuple[cffi.FFI, _cffi_backend.Lib]:
     rlib.R_SignalHandlers = 0
     # Initialize R
     args = [ffi.new('char[]', arg)
-            for arg in (b'R', b'--quiet', b'--no-save')]
+            for arg in (b'R', b'--quiet', b'--no-save', b'--args', b'ryp')]
     rlib.Rf_initialize_R(len(args), args)
     rlib.R_CStackLimit = ffi.cast('uintptr_t', -1)
     rlib.setup_Rmainloop()

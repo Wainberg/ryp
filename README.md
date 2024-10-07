@@ -38,7 +38,8 @@ inside R.
     - [The `format` argument](#the-format-argument-1)
     - [The `index` argument](#the-index-argument)
     - [The `squeeze` argument](#the-squeeze-argument)
-  - [`set_config()` and `get_config()`](#set_config-and-get_config)
+  - [`set_config()`](#set_config)
+  - [`get_config()`](#get_config)
 - [Conversion rules](#conversion-rules)
   - [Python to R (`to_r()`)](#python-to-r-to_r)
     - [NumPy data types](#numpy-data-types)
@@ -279,7 +280,7 @@ even if `squeeze=True`.)
 `squeeze` must be `None` unless the R object is a vector, matrix or array
 (`raw` vectors don't count, because they always convert to Python scalars).
 
-### `set_config()` and `get_config()`
+### `set_config()`
 
 ```python
 set_config(*, to_r_format=None, to_py_format=None, index=None, squeeze=None, 
@@ -310,6 +311,19 @@ For instance, to set pandas as the default format in `to_py()`, run
 - `plot_height`: the height, in inches, of inline plots in Jupyter notebooks;
   must be a positive number. Defaults to 4.8 inches, to match Matplotlib's 
   default.
+
+For additional customization, users can specify ryp-specific settings in their
+`.Rprofile`:
+
+```R
+if ("ryp" %in% commandArgs()) {
+    # Custom settings for running R within ryp
+} else {
+    # Custom settings for native R
+}
+```
+
+### `get_config()`
 
 ```python
 get_config() -> dict[str, dict[str, str] | str | bool | int]
