@@ -1145,9 +1145,9 @@ def _check_activity(select: _cffi_backend._CDataBase,
 def _handle_plot_events() -> None:
     """
     Handle plot events. Starts running in a background thread when the user
-    opens an interactive plot, or on the main thread on Windows. On non-Windows
-    systems, repeatedly polls for events from open file descriptors with
-    _check_activity(), then handles them by calling R_runHandlers(). On
+    opens an interactive plot, or on the main thread on Windows and Mac. On
+    non-Windows systems, repeatedly polls for events from open file descriptors
+    with _check_activity(), then handles them by calling R_runHandlers(). On
     Windows, repeatedly calls GA_doevent() to detect and handle plotting
     events. Returns once the plot window is no longer open.
     """
@@ -1156,7 +1156,7 @@ def _handle_plot_events() -> None:
         while True:
             fd_set = _check_activity(select)
             if fd_set != _ffi.NULL:
-                _rlib.R_runHandlers(_rlib.R_InputHandlers, fd_set)
+                _rlib.R_runHandlers(_rlib.R_InputHandlers.next, fd_set)
             if not _plot_window_open():
                 return
     else:
@@ -1316,6 +1316,7 @@ def r(R_code: str = ...) -> None:
                 raise KeyboardInterrupt
         # If the user just created an interactive plot, start a background
         # thread to handle plot events, or run on the main thread on Windows
+        # and Mac
         global _jupyter_notebook
         if not _jupyter_notebook:
             if platform.system() == 'Windows':
@@ -1324,7 +1325,11 @@ def r(R_code: str = ...) -> None:
                     _graphapp = _ffi.dlopen(_get_rlib_path(_get_R_home())
                                             .replace('R.dll', 'Rgraphapp.dll'))
                     _graphapp.GA_initapp(0, _ffi.NULL)
-                _handle_plot_events()
+                if _plot_window_open():
+                    _handle_plot_events()
+            elif platform.system() == 'Darwin':
+                if _plot_window_open():
+                    _handle_plot_events()
             else:
                 global _plot_event_thread
                 if (_plot_event_thread is None or not
