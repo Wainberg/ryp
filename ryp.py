@@ -1391,7 +1391,9 @@ def to_r(python_object: Any, R_variable_name: str, *,
     with ignore_sigint():
         import pyarrow as pa
     from pyarrow.cffi import ffi as pyarrow_ffi
-    r('suppressPackageStartupMessages(require(arrow))')
+    if not to_py('suppressPackageStartupMessages(require(arrow))'):
+        error_message = 'please install the arrow R package to use ryp'
+        raise ImportError(error_message)
     # Raise errors when format is not None and we're not recursing
     raise_format_errors = format is not None
     # When calling to_r recursively, allow R_variable_name to be a tuple of
@@ -2357,6 +2359,11 @@ def to_r(python_object: Any, R_variable_name: str, *,
                     f'{python_object_name} is a complex '
                     f'{sparse_type.__name__!r}, which is not supported in R')
                 raise TypeError(error_message)
+            if not to_py('suppressPackageStartupMessages(require(Matrix))'):
+                error_message = (
+                    'please install the Matrix R package to convert sparse '
+                    'arrays or matrices to R')
+                raise ImportError(error_message)
             args = rmemory.protect(_rlib.Rf_lcons(
                 _bytestring_to_character_vector(
                     b'R' if sparse_type in (csr_array, csr_matrix) else
@@ -2671,7 +2678,9 @@ def to_py(R_statement: str, *,
     with ignore_sigint():
         import pyarrow as pa
     from pyarrow.cffi import ffi as pyarrow_ffi
-    r('suppressPackageStartupMessages(require(arrow))')
+    if not to_py('suppressPackageStartupMessages(require(arrow))'):
+        error_message = 'please install the arrow R package to use ryp'
+        raise ImportError(error_message)
     # Raise errors when format/squeeze is not None and we're not recursing
     raise_format_errors = format is not None
     raise_squeeze_errors = squeeze is not None
@@ -3581,7 +3590,7 @@ else:
 
 if _jupyter_notebook:
     from IPython.display import display, SVG
-    if not to_py('require("svglite")'):
+    if not to_py('suppressPackageStartupMessages(require(svglite))'):
         error_message = (
             'please install the svglite R package to use inline plotting in '
             'Jupyter notebooks')
