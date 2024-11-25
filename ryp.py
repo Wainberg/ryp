@@ -231,6 +231,8 @@ def _initialize_R() -> tuple[cffi.FFI, _cffi_backend.Lib]:
     SEXP R_do_slot(SEXP, SEXP);
     SEXP R_lsInternal(SEXP, Rboolean);
     void R_runHandlers(InputHandler *, fd_set *);
+    SEXP R_tryCatchError(SEXP (*)(void *), void *,
+                         SEXP (*)(SEXP, void *), void *);
     SEXP R_tryEvalSilent(SEXP, SEXP, int *);
     SEXP Rf_ScalarInteger(int);
     SEXP Rf_ScalarLogical(int);
@@ -378,8 +380,8 @@ def _call(function_call: _cffi_backend._CDataBase, rmemory: _RMemory,
         environment: the R environment (or R6 object) to evaluate the function
                      call inside; by default, baseenv()
     
-    Returns: the R object returned by the function.
-
+    Returns:
+        The R object returned by the function.
     """
     if environment is None:
         environment = _rlib.R_BaseEnv
@@ -430,11 +432,11 @@ def _check_R_variable_name(R_variable_name: str) -> None:
             sorted(set(re.findall(r'[^\w.]',
                                   ''.join(dict.fromkeys(R_variable_name)))))
         if len(invalid_characters) == 1:
-            description = f"the character '{invalid_characters[0]}'"
+            description = f'the character {invalid_characters[0]!r}'
         else:
             description = f"the characters " + ", ".join(
-                f"'{character}'" for character in invalid_characters) + \
-                f" and '{invalid_characters[-1]}'"
+                f'{character!r}' for character in invalid_characters) + \
+                f' and {invalid_characters[-1]!r}'
         error_message = (
             f'R_variable_name {R_variable_name!r} contains {description}, but '
             f'must contain only letters, numbers, periods and underscores')
@@ -1165,6 +1167,28 @@ def _handle_plot_events() -> None:
             pass
 
 
+def _require(R_package_name: bytes, rmemory: _RMemory) -> bool:
+    """
+    Equivalent to
+    `to_py(f'suppressPackageStartupMessages(require({R_package_name}))')`,
+    but using the R C API.
+    
+    Args:
+        R_package_name: the name of the package to require
+        rmemory: an instance of the _RMemory class
+    
+    Returns:
+        Whether the package was successfully loaded.
+    """
+    
+    function_call = rmemory.protect(
+        _rlib.Rf_lang2(_rlib.Rf_install(b'suppressPackageStartupMessages'),
+                       _rlib.Rf_lang2(_rlib.Rf_install(b'require'),
+                                      _bytestring_to_character_vector(
+                                          R_package_name, rmemory))))
+    return _call(function_call, rmemory, 'unable to run require')
+
+
 def r(R_code: str = ...) -> None:
     """
     Run a string of R code. Or, call r() with no arguments to open an R
@@ -1213,6 +1237,11 @@ def r(R_code: str = ...) -> None:
         error_message = \
             f'R_code has type {type(R_code).__name__!r}, but must be a string'
         raise TypeError(error_message)
+    # Check that R_code does not contain null bytes, to avoid Rf_mkCharLenCE()
+    # raising an error when converting it to a character vector later
+    if '\0' in R_code:
+        error_message = r'R_code contains a null byte (\0)'
+        raise SyntaxError(error_message)
     # Wrap the code a withAutoprint({}) block so things like r('2 + 2') are
     # printed to the terminal, like in R's interactive mode. (Skip this in
     # nested mode, i.e. when r() is being called to evaluate an R statement
@@ -1228,15 +1257,42 @@ def r(R_code: str = ...) -> None:
         f'withAutoprint({{{R_code}}}, echo=FALSE)'
     try:
         # Parse the code with R_ParseVector()
+        # - Wrap in R_tryCatchError() to avoid crashing Python in certain edge
+        #   cases where parsing actually raises an R error instead of setting
+        #   status to PARSE_INCOMPLETE, PARSE_ERROR, or PARSE_EOF - for
+        #   instance, when R_code contains an invalid escape sequence like \S.
         # - Because the withAutoprint() may affect the parse error, reparse the
         #   code without it, just to get the correct error message. (This isn't
         #   necessary in nested mode, since we didn't wrap in withAutoprint()).
+        #   The reparse shouldn't raise an error if the original parse didn't,
+        #   so there's no need to wrap the reparse in R_tryCatchError().
         status = _ffi.new('int[1]')
-        parsed_expression = rmemory.protect(_rlib.R_ParseVector(
-            _string_to_character_vector(wrapped_R_code, rmemory),
-            -1, status, _rlib.R_NilValue))
-        # If parsing failed, raise a SyntaxError
-        if status[0] != _rlib.PARSE_OK:
+        e = None
+        
+        def onerror(exception, exc_value, traceback):
+            # By default, tryCatchError() ignores exceptions during the
+            # ffi.callback; instead, store them in a nonlocal and raise after
+            nonlocal e
+            e = exception
+        
+        parsed_expression = rmemory.protect(
+            _rlib.R_tryCatchError(
+                _ffi.callback('SEXP (void *data)', onerror=onerror)(
+                    lambda data: _rlib.R_ParseVector(*_ffi.from_handle(data))),
+                _ffi.new_handle((
+                    _string_to_character_vector(wrapped_R_code, rmemory),
+                    -1, status, _rlib.R_NilValue)),
+                _ffi.callback('SEXP (SEXP cond, void *hdata)')(
+                    lambda cond, hdata: _rlib.R_NilValue),
+                _ffi.NULL))
+        
+        if e is not None:
+            raise e
+        if status[0] == 0:
+            # Not sure how to get the error message from R in this case
+            error_message = 'R_code is a malformed string'
+            raise SyntaxError(error_message)
+        elif status[0] != _rlib.PARSE_OK:
             if not nested:
                 _rlib.R_ParseVector(
                     _string_to_character_vector(R_code, rmemory),
@@ -1387,13 +1443,6 @@ def to_r(python_object: Any, R_variable_name: str, *,
                   None unless python_object is a multidimensional NumPy array,
                   or a type that might contain one (list, tuple, or dict).
     """
-    # Defer loading Arrow until calling to_py() or to_r() for speed
-    with ignore_sigint():
-        import pyarrow as pa
-    from pyarrow.cffi import ffi as pyarrow_ffi
-    if not to_py('suppressPackageStartupMessages(require(arrow))'):
-        error_message = 'please install the arrow R package to use ryp'
-        raise ImportError(error_message)
     # Raise errors when format is not None and we're not recursing
     raise_format_errors = format is not None
     # When calling to_r recursively, allow R_variable_name to be a tuple of
@@ -1433,6 +1482,14 @@ def to_r(python_object: Any, R_variable_name: str, *,
             f'R_variable_name has type {type(R_variable_name).__name__!r}, '
             f'but must be a string')
         raise TypeError(error_message)
+    # Defer loading Arrow until calling to_py() or to_r() for speed
+    if top_level:
+        with ignore_sigint():
+            import pyarrow as pa
+        from pyarrow.cffi import ffi as pyarrow_ffi
+        if not _require(b'arrow', rmemory):
+            error_message = 'please install the arrow R package to use ryp'
+            raise ImportError(error_message)
     # Get preliminary information about what type python_object is
     type_string = str(type(python_object))
     is_pandas = type_string.startswith("<class 'pandas")
@@ -1593,6 +1650,13 @@ def to_r(python_object: Any, R_variable_name: str, *,
         elif isinstance(python_object, float):
             result = rmemory.protect(_rlib.Rf_ScalarReal(python_object))
         elif isinstance(python_object, str):
+            # Check that python_object does not contain null bytes, to avoid
+            # Rf_mkCharLenCE() raising an error when converting it to a
+            # character vector later
+            if '\0' in python_object:
+                error_message = \
+                    r'python_object is a string that contains a null byte (\0)'
+                raise SyntaxError(error_message)
             result = _string_to_character_vector(python_object, rmemory)
         elif isinstance(python_object, (bytes, bytearray)):
             result = rmemory.protect(_rlib.Rf_allocVector(_rlib.RAWSXP,
@@ -2359,7 +2423,7 @@ def to_r(python_object: Any, R_variable_name: str, *,
                     f'{python_object_name} is a complex '
                     f'{sparse_type.__name__!r}, which is not supported in R')
                 raise TypeError(error_message)
-            if not to_py('suppressPackageStartupMessages(require(Matrix))'):
+            if not _require(b'Matrix', rmemory):
                 error_message = (
                     'please install the Matrix R package to convert sparse '
                     'arrays or matrices to R')
@@ -2674,17 +2738,11 @@ def to_py(R_statement: str, *,
     Returns:
         The Python object that results from converting the R variable.
     """
-    # Defer loading Arrow until calling to_py() or to_r() for speed
-    with ignore_sigint():
-        import pyarrow as pa
-    from pyarrow.cffi import ffi as pyarrow_ffi
-    if not to_py('suppressPackageStartupMessages(require(arrow))'):
-        error_message = 'please install the arrow R package to use ryp'
-        raise ImportError(error_message)
     # Raise errors when format/squeeze is not None and we're not recursing
     raise_format_errors = format is not None
     raise_squeeze_errors = squeeze is not None
-    # Keyword arguments default to what's in the config (handle index later)
+    # Keyword arguments default to what's in the config (handle index
+    # later)
     if format is None:
         format = _config['to_py_format']
     elif isinstance(format, dict):
@@ -2696,10 +2754,18 @@ def to_py(R_statement: str, *,
     if squeeze is None:
         squeeze = _config['squeeze']
     with _RMemory(_rlib) as rmemory:
-        # Allow R_variable_name to be a tuple of (R_variable_name, R_object)
-        # instead of a string. This is used when recursively calling to_py().
-        # In this case, don't check inputs for validity.
+        # Allow R_statement to be a tuple of (R_statement, R_object) instead of
+        # a string. This is used when recursively calling to_py(). In this
+        # case, don't check inputs for validity.
         if isinstance(R_statement, str):
+            # Defer loading Arrow until calling to_py() or to_r() for speed
+            with ignore_sigint():
+                import pyarrow as pa
+            from pyarrow.cffi import ffi as pyarrow_ffi
+            if not _require(b'arrow', rmemory):
+                error_message = \
+                    'please install the arrow R package to use ryp'
+                raise ImportError(error_message)
             # Disallow empty code
             if not R_statement:
                 error_message = 'R_statement must be a non-empty string'
@@ -3432,7 +3498,8 @@ def get_config() -> dict[str, dict[str, str] | str | bool | int]:
     """
     Get ryp's current configuration settings.
     
-    Returns: a dictionary of the configuration settings.
+    Returns:
+         A dictionary of the configuration settings.
     """
     return _config
 
@@ -3590,11 +3657,12 @@ else:
 
 if _jupyter_notebook:
     from IPython.display import display, SVG
-    if not to_py('suppressPackageStartupMessages(require(svglite))'):
-        error_message = (
-            'please install the svglite R package to use inline plotting in '
-            'Jupyter notebooks')
-        raise ImportError(error_message)
+    with _RMemory(_rlib) as rmemory:
+        if not _require(b'svglite', rmemory):
+            error_message = (
+                'please install the svglite R package to use inline plotting '
+                'in Jupyter notebooks')
+            raise ImportError(error_message)
     # Make a custom plotting device that saves each plot to a temp file as SVG
     r(f'.tempfile = tempfile(fileext = "png"); '
       f'options(device=function() {{ svglite(.tempfile, '
