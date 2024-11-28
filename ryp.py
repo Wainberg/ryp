@@ -1337,18 +1337,6 @@ def r(R_code: str = ...) -> None:
         expression = _rlib.VECTOR_ELT(parsed_expression, 0)
         result = rmemory.protect(
             _rlib.R_tryEvalSilent(expression, _rlib.R_GlobalEnv, status))
-        # Get the current error message, if there is one
-        if status[0] != 0:
-            error_message = _ffi.string(error_buffer)
-        # Call stop() inside R_tryEvalSilent() to silently raise an error, just
-        # so that warnings are printed. (R_Warnings and PrintWarnings() are not
-        # exposed, so this is a hacky workaround.) Note that this resets
-        # error_buffer, which is why we get the error message from evaluating
-        # the parsed expression first.
-        function_call = \
-            rmemory.protect(_rlib.Rf_lang1(_rlib.Rf_install(b'stop')))
-        _rlib.R_tryEvalSilent(function_call, _rlib.R_BaseEnv,
-                              _ffi.new('int[1]'))
         # Raise RuntimeError on errors and KeyboardInterrupt on Ctrl + C.
         # Since there's no easy way to distinguish Ctrl + C from an error,
         # assume any blank error message was a Ctrl + C; this is a hack.
@@ -1358,6 +1346,7 @@ def r(R_code: str = ...) -> None:
         # the 'Error ' prefix that occurs when the error occurs in a function.
         # (The 'Error: ' prefix also happens at the top level sometimes.)
         if status[0] != 0:
+            error_message = _ffi.string(error_buffer)
             if error_message:
                 error_message = error_message.decode('utf-8').rstrip()\
                     .removeprefix('Error in eval(ei, envir) : ')\
@@ -1370,6 +1359,18 @@ def r(R_code: str = ...) -> None:
                     raise RuntimeError(error_message)
             else:
                 raise KeyboardInterrupt
+        else:
+            error_message = False
+        # If there was no error, call stop() inside R_tryEvalSilent() to
+        # silently raise an error, just so that warnings are printed.
+        # (R_Warnings and PrintWarnings() are not exposed, so this is a hacky
+        # workaround.) Note that this resets error_buffer, which is why we get
+        # the error message from evaluating the parsed expression first.
+        if not error_message:
+            function_call = \
+                rmemory.protect(_rlib.Rf_lang1(_rlib.Rf_install(b'stop')))
+            _rlib.R_tryEvalSilent(function_call, _rlib.R_BaseEnv,
+                                  _ffi.new('int[1]'))
         # If the user just created an interactive plot, start a background
         # thread to handle plot events, or run on the main thread on Windows
         # and Mac
