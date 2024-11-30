@@ -1186,7 +1186,8 @@ def _require(R_package_name: bytes, rmemory: _RMemory) -> bool:
                        _rlib.Rf_lang2(_rlib.Rf_install(b'require'),
                                       _bytestring_to_character_vector(
                                           R_package_name, rmemory))))
-    return _call(function_call, rmemory, 'unable to run require')
+    return _rlib.LOGICAL_ELT(
+        _call(function_call, rmemory, 'unable to run require'), 0)
 
 
 def r(R_code: str = ...) -> None:
