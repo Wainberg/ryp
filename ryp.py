@@ -1485,10 +1485,10 @@ def to_r(python_object: Any, R_variable_name: str, *,
             f'but must be a string')
         raise TypeError(error_message)
     # Defer loading Arrow until calling to_py() or to_r() for speed
+    with ignore_sigint():
+        import pyarrow as pa
+    from pyarrow.cffi import ffi as pyarrow_ffi
     if top_level:
-        with ignore_sigint():
-            import pyarrow as pa
-        from pyarrow.cffi import ffi as pyarrow_ffi
         if not _require(b'arrow', rmemory):
             error_message = 'please install the arrow R package to use ryp'
             raise ImportError(error_message)
@@ -2756,14 +2756,14 @@ def to_py(R_statement: str, *,
     if squeeze is None:
         squeeze = _config['squeeze']
     with _RMemory(_rlib) as rmemory:
-        # Allow R_statement to be a tuple of (R_statement, R_object) instead of
-        # a string. This is used when recursively calling to_py(). In this
-        # case, don't check inputs for validity.
+        # Defer loading Arrow until calling to_py() or to_r() for speed. Allow
+        # R_statement to be a tuple of (R_statement, R_object) instead of a
+        # string. This is used when recursively calling to_py(). In this case,
+        # don't check inputs for validity.
+        with ignore_sigint():
+            import pyarrow as pa
+        from pyarrow.cffi import ffi as pyarrow_ffi
         if isinstance(R_statement, str):
-            # Defer loading Arrow until calling to_py() or to_r() for speed
-            with ignore_sigint():
-                import pyarrow as pa
-            from pyarrow.cffi import ffi as pyarrow_ffi
             if not _require(b'arrow', rmemory):
                 error_message = \
                     'please install the arrow R package to use ryp'
