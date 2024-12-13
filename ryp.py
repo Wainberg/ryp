@@ -1420,10 +1420,10 @@ def to_r(python_object: Any, R_variable_name: str, *,
                          object
         format: the R format to convert 2D NumPy arrays, pandas and polars
                 DataFrames, and pandas MultiIndexes to:
-                - None: default to the value in get_config()['to_r_format']
+                - None: default to the value in options()['to_r_format']
                 - 'keep': keep the same format when converting: convert 2D
                   NumPy arrays to matrices, and DataFrames/MultiIndexes to
-                  data.frames (the default in get_config()['to_r_format'])
+                  data.frames (the default in options()['to_r_format'])
                 - 'matrix': convert all of these to matrices
                 - 'data.frame': convert all of these to data.frames
                 Must be None unless python_object is a 2D NumPy array,
@@ -1513,7 +1513,7 @@ def to_r(python_object: Any, R_variable_name: str, *,
             error_message = (
                 "polars is not installed; consider setting format='numpy', "
                 "format='pandas', or format='pandas-pyarrow' in to_r(), or "
-                "call e.g. set_config(to_r_format='pandas') to change the "
+                "call e.g. options(to_r_format='pandas') to change the "
                 "default format")
             raise ImportError(error_message) from e
         is_df = isinstance(python_object, pl.DataFrame)
@@ -1824,7 +1824,7 @@ def to_r(python_object: Any, R_variable_name: str, *,
             is_index = isinstance(python_object, pd.Index)
             # If python_object is a Series or DataFrame, handle its index
             if is_df or is_series:
-                # Disallow multi-indexes
+                # Disallow MultiIndexes
                 if isinstance(python_object.index, pd.MultiIndex):
                     error_message = (
                         f'{python_object_name}.index is a pandas MultiIndex, '
@@ -2710,7 +2710,7 @@ def to_py(R_statement: str, *,
                 formats as values, to override the output format for only
                 certain R variable types. If None, or if some keys are missing
                 or have None as the format, defaults to
-                get_config()['to_py_format'] (default: 'polars').
+                options()['to_py_format'] (default: 'polars').
                 If the R object is a data.frame and format='matrix', all
                 columns must have the same data type. Must be None when
                 R_statement evaluates to NULL, when it evaluates to an array of
@@ -2725,16 +2725,16 @@ def to_py(R_statement: str, *,
                even if the input was 1D). The index or first column will have
                this string as its name. If False, does not include an index or
                additional first column. If None, defaults to
-               get_config()['index'] (default: 'index'), or sets index=False
-               when format='numpy' (since numeric NumPy arrays cannot store
-               string indexes (except with the inefficient dtype=object). Must
-               be None when format='numpy', or when the final result would be a
-               Python scalar (see squeeze below).
+               options()['index'] (default: 'index'), or sets index=False when
+               format='numpy' (since numeric NumPy arrays cannot store string
+               indices (except with the inefficient dtype=object). Must be None
+               when format='numpy', or when the final result would be a Python
+               scalar (see squeeze below).
         squeeze: whether to convert single-element R vectors, matrices and
                  arrays to Python scalars. (R data.frames are never converted
                  to Python scalars even if squeeze=True.) If None, defaults to
-                 get_config()['squeeze'] (default: True). Must be None unless
-                 the R object is a vector, matrix or array (raw vectors don't
+                 options()['squeeze'] (default: True). Must be None unless the
+                 R object is a vector, matrix or array (raw vectors don't
                  count, because they always convert to Python scalars).
 
     Returns:
@@ -3007,8 +3007,8 @@ def to_py(R_statement: str, *,
                         "polars is not installed; consider setting "
                         "format='numpy', format='pandas', or "
                         "format='pandas-pyarrow' in to_py(), or call e.g. "
-                        "set_config(to_py_format='pandas') to change the "
-                        "default format")
+                        "options(to_py_format='pandas') to change the default "
+                        "format")
                     raise ImportError(error_message) from e
                 return pl.DataFrame(result)
             elif format == 'numpy':
@@ -3443,8 +3443,8 @@ def to_py(R_statement: str, *,
                         "polars is not installed; consider setting "
                         "format='numpy', format='pandas', or "
                         "format='pandas-pyarrow' in to_py(), or call e.g. "
-                        "set_config(to_py_format='pandas') to change the "
-                        "default format")
+                        "options(to_py_format='pandas') to change the default "
+                        "format")
                     raise ImportError(error_message) from e
                 if multidimensional and len(result) == 0:
                     # workaround for github.com/pola-rs/polars/issues/14659
@@ -3496,33 +3496,24 @@ def to_py(R_statement: str, *,
         return result
 
 
-def get_config() -> dict[str, dict[str, str] | str | bool | int]:
+def options(*,
+            to_r_format: Literal['keep', 'matrix', 'data.frame'] | None = None,
+            to_py_format: Literal['polars', 'pandas', 'pandas-pyarrow',
+                                  'numpy'] |
+                          dict[Literal['vector', 'matrix', 'data.frame'],
+                               Literal['polars', 'pandas', 'pandas-pyarrow',
+                               'numpy']] | None = None,
+            index: str | Literal[False] | None = None,
+            squeeze: bool | None = None,
+            plot_width: int | float | None = None,
+            plot_height: int | float | None = None) -> \
+        dict[str, dict[str, str] | str | bool | int] | None:
     """
-    Get ryp's current configuration settings.
+    Get or set ryp's configuration settings.
     
-    Returns:
-         A dictionary of the configuration settings.
-    """
-    return _config
-
-
-def set_config(*, to_r_format: Literal['keep', 'matrix', 'data.frame'] |
-                               None = None,
-               to_py_format: Literal['polars', 'pandas', 'pandas-pyarrow',
-                                     'numpy'] |
-                             dict[Literal['vector', 'matrix', 'data.frame'],
-                                  Literal['polars', 'pandas', 'pandas-pyarrow',
-                                  'numpy']] | None = None,
-               index: str | Literal[False] | None = None,
-               squeeze: bool | None = None,
-               plot_width: int | float | None = None,
-               plot_height: int | float | None = None) -> None:
-    """
-    Set ryp's configuration settings. Arguments that are None are left
-    unchanged.
-    
-    For instance, to set pandas as the default format in to_py(), run
-    set_config(to_py_format='pandas').
+    options() with no arguments gets the current value of each option, while
+    e.g. options(to_py_format='pandas') sets pandas as the default format in
+    to_py() and leaves the other options unchanged.
     
     Args:
         to_r_format: the default value for the format parameter in to_r();
@@ -3544,6 +3535,10 @@ def set_config(*, to_r_format: Literal['keep', 'matrix', 'data.frame'] |
         plot_height: the height, in inches, of inline plots in Jupyter
                      notebooks; must be a positive number. Defaults to 4.8
                      inches, to match Matplotlib's default.
+    
+    Returns:
+        A dictionary of the current values for each option if calling options()
+        with no arguments, or None otherwise.
     """
     no_config_set = True
     if to_r_format is not None:
@@ -3618,8 +3613,7 @@ def set_config(*, to_r_format: Literal['keep', 'matrix', 'data.frame'] |
           f'width={_config["plot_width"]}, '
           f'height={_config["plot_height"]})}})')
     if no_config_set:
-        error_message = 'no configuration settings were specified'
-        raise ValueError(error_message)
+        return _config
 
 
 # Set global variables

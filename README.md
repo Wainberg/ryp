@@ -38,8 +38,7 @@ inside R.
     - [The `format` argument](#the-format-argument-1)
     - [The `index` argument](#the-index-argument)
     - [The `squeeze` argument](#the-squeeze-argument)
-  - [`set_config()`](#set_config)
-  - [`get_config()`](#get_config)
+  - [`options()`](#options)
 - [Conversion rules](#conversion-rules)
   - [Python to R (`to_r()`)](#python-to-r-to_r)
     - [NumPy data types](#numpy-data-types)
@@ -102,19 +101,17 @@ automatically with pip, conda or mamba. These are:
 
 ## Functionality
 
-ryp consists of just three core functions:
+ryp consists of just four functions:
 
-1. `r(R_code)` runs a string of R code. `r()` with no arguments opens up an R 
-   terminal inside your Python terminal for interactive work.
-2. `to_r(python_object, R_variable_name)` converts a Python object into an R 
-   object named `R_variable_name`. 
-3. `to_py(R_statement)` converts the R object produced by evaluating 
+1. [`r(R_code)`](#r) runs a string of R code. [`r()`](#r) with no arguments 
+   opens up an R terminal inside your Python terminal for interactive work.
+2. [`to_r(python_object, R_variable_name)`](#to_r) converts a Python object 
+   into an R object named `R_variable_name`. 
+3. [`to_py(R_statement)`](#to_py) converts the R object produced by evaluating 
    `R_statement` to Python. `R_statement` may be a single variable name, or a 
    more complex code snippet that evaluates to the R object you'd like to 
    convert.
-
-and two more functions, `get_config()` and `set_config()`, for getting and 
-setting ryp's global configuration options.
+4. [`options()`](#options), for getting or setting ryp's configuration options.
 
 ### `r()`
 
@@ -241,7 +238,7 @@ Series, and R data frames and matrices will be converted to polars DataFrames.
 You can change this by setting the `format` argument to `'pandas'`, 
 `'pandas-pyarrow'` (like `'pandas'`, but converting to pyarrow dtypes wherever 
 possible) or `'numpy'`. (You can also change the default format, e.g. with 
-`set_config(to_py_format='pandas')`.)
+`options(to_py_format='pandas')`.)
 
 For finer-grained control, you can set `format` for only certain R variable 
 types by specifying a dictionary with `'vector'`, `'matrix'`, and/or
@@ -280,19 +277,15 @@ even if `squeeze=True`.)
 `squeeze` must be `None` unless the R object is a vector, matrix or array
 (`raw` vectors don't count, because they always convert to Python scalars).
 
-### `set_config()`
+### `options()`
 
 ```python
-set_config(*, to_r_format=None, to_py_format=None, index=None, squeeze=None, 
-           plot_width: int | float | None = None, 
-           plot_height: int | float | None = None) -> None
+options(*, to_r_format=None, to_py_format=None, index=None, squeeze=None, 
+        plot_width: int | float | None = None, 
+        plot_height: int | float | None = None) -> None
 ```
 
-`set_config` sets ryp's configuration settings. Arguments that are `None` are 
-left unchanged.
-    
-For instance, to set pandas as the default format in `to_py()`, run 
-`set_config(to_py_format='pandas')`.
+`options` gets or sets ryp's configuration settings:
 
 - `to_r_format`: the default value for the `format` parameter in `to_r()`; 
   must be `'keep'` (the default), `'matrix'`, or `'data.frame'`.
@@ -312,6 +305,13 @@ For instance, to set pandas as the default format in `to_py()`, run
   must be a positive number. Defaults to 4.8 inches, to match Matplotlib's 
   default.
 
+For instance, to set pandas as the default format in `to_py()`, run 
+`options(to_py_format='pandas')`. This leaves the other options unchanged.
+
+`options()` with no arguments returns the current configuration options as a 
+dictionary, with keys `to_r_format`, `to_py_format`, `index`, `squeeze`, 
+`plot_width`, and `plot_height`.
+
 For additional customization, users can specify ryp-specific settings in their
 `.Rprofile`:
 
@@ -322,16 +322,6 @@ if ("ryp" %in% commandArgs()) {
     # Custom settings for native R
 }
 ```
-
-### `get_config()`
-
-```python
-get_config() -> dict[str, dict[str, str] | str | bool | int]
-```
-
-`get_config` returns the current configuration options as a dictionary, with 
-keys `to_r_format`, `to_py_format`, `index`, `squeeze`, `plot_width`, and 
-`plot_height`.
 
 ## Conversion rules
 
@@ -544,7 +534,7 @@ scaled_data
 ```
 Note: we could have just written `to_py('scale(data)')` instead of
 `r('data <- scale(data)')` followed by `to_py('data')`. We could also have 
-run `set_config(to_py_format='pandas')` at the top, to avoid having to specify
+run `options(to_py_format='pandas')` at the top, to avoid having to specify
 `format='pandas'` in each `to_py()` call.
 
 2. Run a linear model on a polars DataFrame:
