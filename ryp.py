@@ -1484,47 +1484,94 @@ def to_r(python_object: Any, R_variable_name: str, *,
             f'R_variable_name has type {type(R_variable_name).__name__!r}, '
             f'but must be a string')
         raise TypeError(error_message)
-    # Defer loading Arrow until calling to_py() or to_r() for speed
-    with ignore_sigint():
-        import pyarrow as pa
-    from pyarrow.cffi import ffi as pyarrow_ffi
-    if top_level:
-        if not _require(b'arrow', rmemory):
-            error_message = 'please install the arrow R package to use ryp'
-            raise ImportError(error_message)
     # Get preliminary information about what type python_object is
-    type_string = str(type(python_object))
-    is_pandas = type_string.startswith("<class 'pandas")
-    is_polars = type_string.startswith("<class 'polars")
-    is_sparse = type_string.startswith("<class 'scipy.sparse")
-    if is_pandas:
+    if 'numpy' in sys.modules:
         import numpy as np
-        with ignore_sigint():
-            import pandas as pd
-        is_df = isinstance(python_object, pd.DataFrame)
-        is_series = isinstance(python_object, pd.Series)
+        is_ndarray = isinstance(python_object, np.ndarray)
+        is_matrix = is_ndarray and python_object.ndim == 2
+        is_multidimensional_ndarray = is_ndarray and python_object.ndim >= 2
+        is_numpy_generic = isinstance(python_object, np.generic)
+        is_numpy = is_ndarray or is_numpy_generic
+    else:
+        is_ndarray = False
+        is_matrix = False
+        is_multidimensional_ndarray = False
+        is_numpy = False
+    if 'scipy' in sys.modules:
+        import numpy as np
+        from scipy.sparse import csr_array, csc_array, coo_array, \
+            csr_matrix, csc_matrix, coo_matrix
+        if isinstance(python_object, csr_array):
+            is_sparse = True
+            is_csr = True
+            is_csc = False
+            is_coo = False
+            sparse_supertype = 'array'
+        elif isinstance(python_object, csr_matrix):
+            is_sparse = True
+            is_csr = True
+            is_csc = False
+            is_coo = False
+            sparse_supertype = 'matrix'
+        elif isinstance(python_object, csc_array):
+            is_sparse = True
+            is_csr = False
+            is_csc = True
+            is_coo = False
+            sparse_supertype = 'array'
+        elif isinstance(python_object, csc_matrix):
+            is_sparse = True
+            is_csr = False
+            is_csc = True
+            is_coo = False
+            sparse_supertype = 'matrix'
+        elif isinstance(python_object, coo_array):
+            is_sparse = True
+            is_csr = False
+            is_csc = False
+            is_coo = True
+            sparse_supertype = 'array'
+        elif isinstance(python_object, coo_matrix):
+            is_sparse = True
+            is_csr = False
+            is_csc = False
+            is_coo = True
+            sparse_supertype = 'matrix'
+        else:
+            is_sparse = False
+    else:
+        is_sparse = False
+    if 'pandas' in sys.modules:
+        import numpy as np
+        import pandas as pd
+        is_pandas_df = isinstance(python_object, pd.DataFrame)
+        is_pandas_series = isinstance(python_object, pd.Series)
         is_index = isinstance(python_object, pd.Index)
         is_multiindex = isinstance(python_object, pd.MultiIndex)
-    elif is_polars:
-        try:
-            with ignore_sigint():
-                import polars as pl
-        except ImportError as e:
-            error_message = (
-                "polars is not installed; consider setting format='numpy', "
-                "format='pandas', or format='pandas-pyarrow' in to_r(), or "
-                "call e.g. options(to_r_format='pandas') to change the "
-                "default format")
-            raise ImportError(error_message) from e
-        is_df = isinstance(python_object, pl.DataFrame)
-        is_series = isinstance(python_object, pl.Series)
-        is_index = False
-        is_multiindex = False
+        is_pandas_timestamp_or_timedelta = \
+            isinstance(python_object, pd.Timestamp) or \
+            isinstance(python_object, pd.Timedelta)
+        is_pandas_period = isinstance(python_object, pd.Period)
+        is_pandas = is_pandas_df or is_pandas_series or is_index or \
+            is_pandas_timestamp_or_timedelta or is_pandas_period or \
+            python_object is pd.NA or python_object is pd.NaT
     else:
-        is_df = False
-        is_series = False
+        is_pandas_df = False
+        is_pandas_series = False
         is_index = False
         is_multiindex = False
+        is_pandas = False
+    if 'polars' in sys.modules:
+        import polars as pl
+        is_polars_df = isinstance(python_object, pl.DataFrame)
+        is_polars_series = isinstance(python_object, pl.Series)
+        is_polars = is_polars_df or is_polars_series
+    else:
+        is_polars_df = False
+        is_polars_series = False
+        is_polars = False
+    is_df = is_pandas_df or is_polars_df
+    is_series = is_pandas_series or is_polars_series
     if (is_df or is_series or is_index) and \
             max(python_object.shape) > 2_147_483_647:
         dimension_name = 'elements' if len(python_object.shape) == 1 else \
@@ -1536,18 +1583,21 @@ def to_r(python_object: Any, R_variable_name: str, *,
             f'{max(python_object.shape):,} {dimension_name}, more than '
             f'INT32_MAX (2,147,483,647), the maximum supported in R')
         raise ValueError(error_message)
-    is_numpy = type_string.startswith("<class 'numpy")
-    if is_numpy:
-        import numpy as np
-        is_ndarray = isinstance(python_object, np.ndarray)
-        is_matrix = is_ndarray and python_object.ndim == 2
-        is_multidimensional_ndarray = is_ndarray and python_object.ndim >= 2
-    else:
-        is_ndarray = False
-        is_matrix = False
-        is_multidimensional_ndarray = False
     shape = None
     converted_index_separately = False
+    # Defer loading Arrow until calling to_py() or to_r() for speed
+    if 'pyarrow' in sys.modules:
+        import pyarrow as pa
+        is_pyarrow_array = isinstance(python_object, pa.Array)
+    else:
+        with ignore_sigint():
+            import pyarrow as pa
+        is_pyarrow_array = False
+    from pyarrow.cffi import ffi as pyarrow_ffi
+    if top_level:
+        if not _require(b'arrow', rmemory):
+            error_message = 'please install the arrow R package to use ryp'
+            raise ImportError(error_message)
     # If format is not None, and we are not recursing, raise an error if
     # python_object is anything but a DataFrame, MultiIndex, matrix (2D NumPy
     # array) or something that might contain one (list, tuple, or dict)
@@ -2169,21 +2219,16 @@ def to_r(python_object: Any, R_variable_name: str, *,
                         # due to the pd.concat)
                         if isinstance(arrow, pa.ChunkedArray):
                             arrow = arrow.combine_chunks()
-            elif isinstance(python_object, (pd.Timestamp, pd.Timedelta)):
+            elif is_pandas_timestamp_or_timedelta:
                 result = to_r(pa.array([python_object]), (
                     f'pyarrow.array([{python_object_name}])', rmemory))
-            elif isinstance(python_object, pd.Period):
+            elif is_pandas_period:
                 result = to_r(pa.array([python_object.to_timestamp()]), (
                     f'pyarrow.array([{python_object_name}.to_timestamp()])',
                     rmemory))
             elif python_object is pd.NA or python_object is pd.NaT:
                 result = rmemory.protect(_rlib.Rf_allocVector(_rlib.LGLSXP, 1))
                 _rlib.SET_LOGICAL_ELT(result, 0, _rlib.R_NaInt)
-            elif not (is_df or is_series or is_index):
-                error_message = (
-                    f'{python_object_name} has unsupported type '
-                    f'{type(python_object).__name__!r}')
-                raise TypeError(error_message)
         elif is_numpy:
             if is_ndarray and python_object.ndim > 0 and \
                     max(python_object.shape) > 2_147_483_647:
@@ -2194,215 +2239,186 @@ def to_r(python_object: Any, R_variable_name: str, *,
                     f'dimension {max_dimension:,}, more than INT32_MAX '
                     f'(2,147,483,647), the maximum supported in R')
                 raise ValueError(error_message)
-            if is_ndarray or isinstance(python_object, np.generic):
-                dtype = python_object.dtype
-                if python_object.ndim == 0:  # generic or 0D ndarray
-                    try:
-                        is_nat = np.isnat(python_object)
-                    except TypeError:
-                        is_nat = False
-                    if is_nat:
-                        # np.datetime64('NaT', time_unit) or
-                        # np.timedelta64('NaT', time_unit); return NA
-                        result = rmemory.protect(
-                            _rlib.Rf_allocVector(_rlib.LGLSXP, 1))
-                        _rlib.SET_LOGICAL_ELT(result, 0, _rlib.R_NaInt)
-                    else:
-                        if dtype == 'float128':
-                            # np.float128(...).item() is a null-op; must cast
-                            python_object = float(python_object)
-                            python_object_name = f'float({python_object_name})'
-                        else:
-                            is_datetime64 = dtype.type == np.datetime64
-                            is_timedelta64 = dtype.type == np.timedelta64
-                            if is_datetime64 or is_timedelta64:
-                                if dtype.name[-3:-1] == 'ns' or \
-                                        dtype.name[-2] in \
-                                        ('DWMY' if is_datetime64 else 'MY'):
-                                    # datetime64[ns], timedelta64[ns],
-                                    # timedelta64[M] and timedelta64[Y] convert
-                                    # to int rather than datetime/timedelta;
-                                    # datetime64[D], datetime64[W],
-                                    # datetime64[M] and datetime64[Y] convert
-                                    # to date rather than datetime
-                                    new_dtype = 'datetime64[us]' \
-                                        if is_datetime64 else 'timedelta64[us]'
-                                    python_object = \
-                                        python_object.astype(new_dtype)
-                                    python_object_name = \
-                                        f'{python_object_name}' \
-                                        f'.astype({new_dtype!r})'
-                            python_object = python_object.item()
-                            python_object_name = f'{python_object_name}.item()'
-                            if dtype.type == np.void and \
-                                    isinstance(python_object, bytes):
-                                # unstructured void array; equivalent to an R
-                                # raw, but .item() converts it to bytes rather
-                                # than bytearray for some reason
-                                python_object = bytearray(python_object)
-                                python_object_name = \
-                                    f'bytearray({python_object_name})'
-                        result = to_r(python_object,
-                                      (python_object_name, rmemory))
+            dtype = python_object.dtype
+            if python_object.ndim == 0:  # generic or 0D ndarray
+                try:
+                    is_nat = np.isnat(python_object)
+                except TypeError:
+                    is_nat = False
+                if is_nat:
+                    # np.datetime64('NaT', time_unit) or
+                    # np.timedelta64('NaT', time_unit); return NA
+                    result = rmemory.protect(
+                        _rlib.Rf_allocVector(_rlib.LGLSXP, 1))
+                    _rlib.SET_LOGICAL_ELT(result, 0, _rlib.R_NaInt)
                 else:
-                    # Disallow bytestring and structured array (np.void)
-                    # dtypes and zero-length datetime64 and timedelta64 arrays
-                    # with no time unit, and multidimensional datetime64 arrays
-                    # (or dtype=object arrays of datetimes)
-                    if np.issubdtype(dtype, 'S'):
-                        error_message = (
-                            f'{python_object_name} is a NumPy array with the '
-                            f'bytestring data type {str(dtype)!r}, which '
-                            f'lacks an R equivalent.\nConsider converting to '
-                            f'a string data type before calling to_r().')
-                        raise TypeError(error_message)
-                    if dtype.type == np.void:
-                        error_message = (
-                            f'{python_object_name} is a structured NumPy '
-                            f'array, which lacks an R equivalent')
-                        raise TypeError(error_message)
-                    is_datetime64 = dtype.type == np.datetime64
-                    is_timedelta64 = dtype.type == np.timedelta64
-                    if python_object.size == 0 and (
-                            is_datetime64 or is_timedelta64) and \
-                            '[' not in str(dtype):
-                        dtype = \
-                            'datetime64' if is_datetime64 else 'timedelta64'
-                        error_message = (
-                            f'{python_object_name} is a zero-length NumPy '
-                            f'array with data type {str(dtype)!r} and no time '
-                            f'unit, which lacks an R equivalent')
-                        raise TypeError(error_message)
-                    if is_datetime64 and is_multidimensional_ndarray and \
-                            format != 'data.frame':
-                        if is_matrix:
-                            error_message = (
-                                f"{python_object_name} is a 2D NumPy array "
-                                f"of datetimes, so format='data.frame' must "
-                                f"be specified.\n(POSIXct matrices are not "
-                                f"supported, only vectors and data.frames.)")
-                            raise TypeError(error_message)
-                        else:
-                            error_message = (
-                                f"{python_object_name} is a "
-                                f"{python_object.ndim:,}D NumPy array of "
-                                f"datetimes, which cannot be converted to R.\n"
-                                f"(POSIXct arrays are not supported, only "
-                                f"vectors and data.frames.)")
-                            raise TypeError(error_message)
-                    # Convert timedelta64 with time units of greater than
-                    # seconds to seconds
-                    if is_timedelta64:
-                        time_unit = python_object.dtype.name[-2]
-                        if time_unit in 'mhDWMY':
-                            python_object = \
-                                python_object.astype('timedelta64[s]')
-                    # Convert float16/float128 (which Arrow does not support)
-                    # to float
-                    if dtype == np.float16 or dtype == 'float128':
-                        python_object = python_object.astype(float)
-                    # Handle complex dtypes separately, since Arrow doesn't
-                    # support them
-                    if dtype == np.complex64 or dtype == np.complex128:
-                        if dtype == np.complex64:
-                            python_object = python_object.astype(complex)
-                        if python_object.size == 0:
-                            # In NumPy, empty >=2D arrays have a length of 1,
-                            # but in R they have a length of 0
-                            result = rmemory.protect(
-                                _rlib.Rf_allocVector(_rlib.CPLXSXP, 0))
-                        else:
-                            result = rmemory.protect(_rlib.Rf_allocVector(
-                                _rlib.CPLXSXP, python_object.size))
-                            _ffi.memmove(
-                                _rlib.COMPLEX(result),
-                                _ffi.buffer(_ffi.cast(
-                                    'Rcomplex *',
-                                    python_object.__array_interface__[
-                                        'data'][0]),
-                                    python_object.nbytes),
-                                python_object.size * _ffi.sizeof('Rcomplex'))
+                    if dtype == 'float128':
+                        # np.float128(...).item() is a null-op; must cast
+                        python_object = float(python_object)
+                        python_object_name = f'float({python_object_name})'
                     else:
-                        # Finally, convert to Arrow
-                        flat_python_object = python_object.ravel('F')
-                        if dtype == object:
-                            arrow = _convert_object_to_arrow(
-                                flat_python_object,
-                                f"{python_object_name} is a NumPy array with "
-                                f"data type 'object'")
-                            if not isinstance(arrow, pa.Array):
-                                # complex; convert via NumPy, not Arrow
-                                python_object = \
-                                    arrow.reshape(python_object.shape)
-                                arrow = None
-                                result = to_r(python_object,
-                                              (python_object_name, rmemory))
-                        else:
-                            # Add a mask of the nan entries to be consistent
-                            # with pandas; without it, np.array([1.0, np.nan])
-                            # would become c(1, NaN) instead of c(1, NA) like
-                            # pd.Series([1.0, np.nan]).
-                            try:
-                                arrow = pa.array(flat_python_object,
-                                                 mask=np.isnan(
-                                                     flat_python_object))
-                            except TypeError as e:
-                                if str(e) == (
-                                        "ufunc 'isnan' not supported for the "
-                                        "input types, and the inputs could "
-                                        "not be safely coerced to any "
-                                        "supported types according to the "
-                                        "casting rule ''safe''"):
-                                    arrow = pa.array(flat_python_object)
-                                else:
-                                    raise
-                        # If NumPy array was a timedelta64 (or an object array
-                        # that converted to an Arrow DurationArray) and the
-                        # output format is a data.frame, reshape now to avoid
-                        # having to convert to a matrix as an intermediate step
-                        if format == 'data.frame' and (
-                                is_timedelta64 or arrow is not None and
-                                pa.types.is_duration(arrow.type)):
-                            nrows, ncols = python_object.shape
-                            arrow = pa.RecordBatch.from_arrays([
-                                arrow[i * nrows: (i + 1) * nrows]
-                                for i in range(ncols)],
-                                names=colnames if colnames is not None else [
-                                    f'V{i}' for i in range(1, ncols + 1)])
-                            is_matrix = is_multidimensional_ndarray = False
+                        is_datetime64 = dtype.type == np.datetime64
+                        is_timedelta64 = dtype.type == np.timedelta64
+                        if is_datetime64 or is_timedelta64:
+                            if dtype.name[-3:-1] == 'ns' or dtype.name[-2] in \
+                                    ('DWMY' if is_datetime64 else 'MY'):
+                                # datetime64[ns], timedelta64[ns],
+                                # timedelta64[M] and timedelta64[Y] convert
+                                # to int rather than datetime/timedelta;
+                                # datetime64[D], datetime64[W],
+                                # datetime64[M] and datetime64[Y] convert
+                                # to date rather than datetime
+                                new_dtype = 'datetime64[us]' \
+                                    if is_datetime64 else 'timedelta64[us]'
+                                python_object = python_object.astype(new_dtype)
+                                python_object_name = \
+                                    f'{python_object_name}' \
+                                    f'.astype({new_dtype!r})'
+                        python_object = python_object.item()
+                        python_object_name = f'{python_object_name}.item()'
+                        if dtype.type == np.void and \
+                                isinstance(python_object, bytes):
+                            # unstructured void array; equivalent to an R raw,
+                            # but .item() converts it to bytes rather than
+                            # bytearray for some reason
+                            python_object = bytearray(python_object)
+                            python_object_name = \
+                                f'bytearray({python_object_name})'
+                    result = to_r(python_object, (python_object_name, rmemory))
             else:
-                error_message = (
-                    f'{python_object_name} has unsupported type '
-                    f'{type(python_object).__name__!r}')
-                raise TypeError(error_message)
-        # Only support arrow Arrays when recursing, not at the top level
-        elif not top_level and type_string.startswith("<class 'pyarrow"):
-            if isinstance(python_object, pa.Array):
-                if isinstance(python_object, pa.ExtensionArray):
+                # Disallow bytestring and structured array (np.void) dtypes and
+                # zero-length datetime64 and timedelta64 arrays with no time
+                # unit, and multidimensional datetime64 arrays (or dtype=object
+                # arrays of datetimes)
+                if np.issubdtype(dtype, 'S'):
                     error_message = (
-                        f'{python_object_name} has unsupported type '
-                        f'pyarrow.ExtensionArray')
+                        f'{python_object_name} is a NumPy array with the '
+                        f'bytestring data type {str(dtype)!r}, which lacks an '
+                        f'R equivalent.\nConsider converting to a string data '
+                        f'type before calling to_r().')
                     raise TypeError(error_message)
-                arrow = python_object
-            else:
+                if dtype.type == np.void:
+                    error_message = (
+                        f'{python_object_name} is a structured NumPy array, '
+                        f'which lacks an R equivalent')
+                    raise TypeError(error_message)
+                is_datetime64 = dtype.type == np.datetime64
+                is_timedelta64 = dtype.type == np.timedelta64
+                if python_object.size == 0 and (
+                        is_datetime64 or is_timedelta64) and \
+                        '[' not in str(dtype):
+                    dtype = 'datetime64' if is_datetime64 else 'timedelta64'
+                    error_message = (
+                        f'{python_object_name} is a zero-length NumPy array '
+                        f'with data type {str(dtype)!r} and no time unit, '
+                        f'which lacks an R equivalent')
+                    raise TypeError(error_message)
+                if is_datetime64 and is_multidimensional_ndarray and \
+                        format != 'data.frame':
+                    if is_matrix:
+                        error_message = (
+                            f"{python_object_name} is a 2D NumPy array of "
+                            f"datetimes, so format='data.frame' must be "
+                            f"specified.\n(POSIXct matrices are not "
+                            f"supported, only vectors and data.frames.)")
+                        raise TypeError(error_message)
+                    else:
+                        error_message = (
+                            f"{python_object_name} is a "
+                            f"{python_object.ndim:,}D NumPy array of "
+                            f"datetimes, which cannot be converted to R.\n"
+                            f"(POSIXct arrays are not supported, only vectors "
+                            f"and data.frames.)")
+                        raise TypeError(error_message)
+                # Convert timedelta64 with time units of greater than
+                # seconds to seconds
+                if is_timedelta64:
+                    time_unit = python_object.dtype.name[-2]
+                    if time_unit in 'mhDWMY':
+                        python_object = python_object.astype('timedelta64[s]')
+                # Convert float16/float128 (which Arrow does not support) to
+                # float
+                if dtype == np.float16 or dtype == 'float128':
+                    python_object = python_object.astype(float)
+                # Handle complex dtypes separately, since Arrow doesn't support
+                # them
+                if dtype == np.complex64 or dtype == np.complex128:
+                    if dtype == np.complex64:
+                        python_object = python_object.astype(complex)
+                    if python_object.size == 0:
+                        # In NumPy, empty >=2D arrays have a length of 1, but
+                        # in R they have a length of 0
+                        result = rmemory.protect(
+                            _rlib.Rf_allocVector(_rlib.CPLXSXP, 0))
+                    else:
+                        result = rmemory.protect(_rlib.Rf_allocVector(
+                            _rlib.CPLXSXP, python_object.size))
+                        _ffi.memmove(
+                            _rlib.COMPLEX(result),
+                            _ffi.buffer(_ffi.cast(
+                                'Rcomplex *',
+                                python_object.__array_interface__['data'][0]),
+                                python_object.nbytes),
+                            python_object.size * _ffi.sizeof('Rcomplex'))
+                else:
+                    # Finally, convert to Arrow
+                    flat_python_object = python_object.ravel('F')
+                    if dtype == object:
+                        arrow = _convert_object_to_arrow(
+                            flat_python_object,
+                            f"{python_object_name} is a NumPy array with data "
+                            f"type 'object'")
+                        if not isinstance(arrow, pa.Array):
+                            # complex; convert via NumPy, not Arrow
+                            python_object = arrow.reshape(python_object.shape)
+                            arrow = None
+                            result = to_r(python_object,
+                                          (python_object_name, rmemory))
+                    else:
+                        # Add a mask of the nan entries to be consistent with
+                        # pandas; without it, np.array([1.0, np.nan]) would
+                        # become c(1, NaN) instead of c(1, NA) like
+                        # pd.Series([1.0, np.nan]).
+                        try:
+                            arrow = pa.array(flat_python_object,
+                                             mask=np.isnan(flat_python_object))
+                        except TypeError as e:
+                            if str(e) == (
+                                    "ufunc 'isnan' not supported for the "
+                                    "input types, and the inputs could not be "
+                                    "safely coerced to any supported types "
+                                    "according to the casting rule ''safe''"):
+                                arrow = pa.array(flat_python_object)
+                            else:
+                                raise
+                    # If NumPy array was a timedelta64 (or an object array that
+                    # converted to an Arrow DurationArray) and the output
+                    # format is a data.frame, reshape now to avoid having to
+                    # convert to a matrix as an intermediate step
+                    if format == 'data.frame' and (
+                            is_timedelta64 or arrow is not None and
+                            pa.types.is_duration(arrow.type)):
+                        nrows, ncols = python_object.shape
+                        arrow = pa.RecordBatch.from_arrays([
+                            arrow[i * nrows: (i + 1) * nrows]
+                            for i in range(ncols)],
+                            names=colnames if colnames is not None else [
+                                f'V{i}' for i in range(1, ncols + 1)])
+                        is_matrix = is_multidimensional_ndarray = False
+        # Only support arrow Arrays when recursing, not at the top level
+        elif is_pyarrow_array:
+            if top_level:
                 error_message = (
                     f'{python_object_name} has unsupported type '
                     f'{type(python_object).__name__!r}')
                 raise TypeError(error_message)
-        elif is_sparse:
-            import numpy as np
-            from scipy.sparse import csr_array, csc_array, coo_array, \
-                csr_matrix, csc_matrix, coo_matrix
-            sparse_type = type(python_object)
-            if sparse_type in (csr_array, csc_array, coo_array):
-                sparse_supertype = 'array'
-            elif sparse_type in (csr_matrix, csc_matrix, coo_matrix):
-                sparse_supertype = 'matrix'
-            else:
+            elif isinstance(python_object, pa.ExtensionArray):
                 error_message = (
-                    f'{python_object_name} has unsupported scipy.sparse type '
-                    f'{sparse_type.__name__!r}')
+                    f'{python_object_name} has unsupported type '
+                    f'pyarrow.ExtensionArray')
                 raise TypeError(error_message)
+            arrow = python_object
+        elif is_sparse:
             if python_object.nnz > 2_147_483_647:
                 error_message = (
                     f'{python_object_name} is a sparse {sparse_supertype} '
@@ -2423,7 +2439,8 @@ def to_r(python_object: Any, R_variable_name: str, *,
                     python_object.dtype == np.complex128:
                 error_message = (
                     f'{python_object_name} is a complex '
-                    f'{sparse_type.__name__!r}, which is not supported in R')
+                    f'{type(python_object).__name__!r}, which is not '
+                    f'supported in R')
                 raise TypeError(error_message)
             if not _require(b'Matrix', rmemory):
                 error_message = (
@@ -2432,9 +2449,7 @@ def to_r(python_object: Any, R_variable_name: str, *,
                 raise ImportError(error_message)
             args = rmemory.protect(_rlib.Rf_lcons(
                 _bytestring_to_character_vector(
-                    b'R' if sparse_type in (csr_array, csr_matrix) else
-                    b'C' if sparse_type in (csc_array, csc_matrix) else b'T',
-                    rmemory),
+                    b'R' if is_csr else b'C' if is_csc else b'T', rmemory),
                 _rlib.R_NilValue))
             _rlib.SET_TAG(args, _rlib.Rf_install(b'repr'))
             args = rmemory.protect(_rlib.Rf_lcons(rmemory.protect(
@@ -2458,7 +2473,7 @@ def to_r(python_object: Any, R_variable_name: str, *,
                 _rlib.Rf_lcons(to_r(python_object.data, (
                     f'{python_object_name}.data', rmemory)), args))
             _rlib.SET_TAG(args, _rlib.Rf_install(b'x'))
-            if sparse_type in (coo_array, coo_matrix):
+            if is_coo:
                 args = rmemory.protect(
                     _rlib.Rf_lcons(to_r(python_object.col, (
                         f'{python_object_name}.col', rmemory)), args))
@@ -2475,8 +2490,7 @@ def to_r(python_object: Any, R_variable_name: str, *,
                 args = rmemory.protect(
                     _rlib.Rf_lcons(to_r(python_object.indices, (
                         f'{python_object_name}.indices', rmemory)), args))
-                _rlib.SET_TAG(args, _rlib.Rf_install(
-                    b'i' if sparse_type in (csc_array, csc_matrix) else b'j'))
+                _rlib.SET_TAG(args, _rlib.Rf_install(b'i' if is_csc else b'j'))
             function_call = rmemory.protect(
                 _rlib.Rf_lcons(rmemory.protect(
                     _rlib.Rf_lang3(
