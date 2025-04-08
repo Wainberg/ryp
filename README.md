@@ -330,7 +330,7 @@ if ("ryp" %in% commandArgs()) {
 | Python                                                                  | R                                                                                                         |
 |-------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------|
 | `None`                                                                  | `NULL` (if scalar) or `NA` (if inside NumPy, pandas or polars)                                            |
-| `nan`                                                                   | `NaN` (if scalar or inside polars) or `NA` (if inside NumPy or pandas)                                    |
+| `nan`                                                                   | `NaN` (if scalar or inside NumPy or polars) or `NA` (if inside pandas)                                    |
 | `pd.NA`                                                                 | `NA`                                                                                                      |
 | `pd.NaT`, `np.datetime64('NaT')`, `np.timedelta64('NaT')`               | `NA`                                                                                                      |   
 | `bool`                                                                  | length-1 `logical` vector                                                                                 |

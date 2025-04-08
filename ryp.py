@@ -2375,22 +2375,7 @@ def to_r(python_object: Any, R_variable_name: str, *,
                             result = to_r(python_object,
                                           (python_object_name, rmemory))
                     else:
-                        # Add a mask of the nan entries to be consistent with
-                        # pandas; without it, np.array([1.0, np.nan]) would
-                        # become c(1, NaN) instead of c(1, NA) like
-                        # pd.Series([1.0, np.nan]).
-                        try:
-                            arrow = pa.array(flat_python_object,
-                                             mask=np.isnan(flat_python_object))
-                        except TypeError as e:
-                            if str(e) == (
-                                    "ufunc 'isnan' not supported for the "
-                                    "input types, and the inputs could not be "
-                                    "safely coerced to any supported types "
-                                    "according to the casting rule ''safe''"):
-                                arrow = pa.array(flat_python_object)
-                            else:
-                                raise
+                        arrow = pa.array(flat_python_object)
                     # If NumPy array was a timedelta64 (or an object array that
                     # converted to an Arrow DurationArray) and the output
                     # format is a data.frame, reshape now to avoid having to
@@ -3482,9 +3467,7 @@ def to_py(R_statement: str, *,
                                    f'{R_statement!r}')
                     levels = to_py((f'levels({R_statement})', levels),
                                    format=format, index=False, squeeze=False)
-                    result = result.cast(
-                        # github.com/pola-rs/polars/issues/14665
-                        pl.Enum(levels) if len(levels) > 0 else pl.Enum)
+                    result = result.cast(pl.Enum(levels))
                 if index:
                     if not multidimensional:
                         result = result.to_frame(name=vector_name)
