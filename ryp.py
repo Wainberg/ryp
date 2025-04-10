@@ -222,13 +222,16 @@ def _initialize_R() -> tuple[cffi.FFI, _cffi_backend.Lib]:
     Rbyte *RAW(SEXP);
     double *REAL(SEXP);
     const char* R_CHAR(SEXP);
-    SEXP R_FindNamespace(SEXP info);
+    SEXP R_FindNamespace(SEXP);
     SEXP R_ParseVector(SEXP, int, int *, SEXP);
     int R_ReplDLLdo1(void);
     void R_ReplDLLinit(void);
     extern int R_SignalHandlers;
     const char *R_curErrorBuf(void);
+    SEXP R_do_new_object(SEXP);
     SEXP R_do_slot(SEXP, SEXP);
+    SEXP R_do_slot_assign(SEXP, SEXP, SEXP);
+    SEXP R_getClassDef(const char *);
     SEXP R_lsInternal(SEXP, Rboolean);
     void R_runHandlers(InputHandler *, fd_set *);
     SEXP R_tryCatchError(SEXP (*)(void *), void *,
@@ -1583,8 +1586,11 @@ def to_r(python_object: Any, R_variable_name: str, *,
             f'{max(python_object.shape):,} {dimension_name}, more than '
             f'INT32_MAX (2,147,483,647), the maximum supported in R')
         raise ValueError(error_message)
+    if is_numpy or is_series or is_index:
+        dtype = python_object.dtype
     shape = None
     converted_index_separately = False
+    add_integer64 = False
     # Defer loading Arrow until calling to_py() or to_r() for speed
     if 'pyarrow' in sys.modules:
         import pyarrow as pa
@@ -1639,6 +1645,7 @@ def to_r(python_object: Any, R_variable_name: str, *,
         python_object = np.empty((len(rownames), 0))
         is_df = is_polars = False
         is_numpy = is_ndarray = is_matrix = is_multidimensional_ndarray = True
+        dtype = python_object.dtype
     try:
         # If rownames is not None, and we are not recursing, give an error if
         # python_object is bytes/bytearray (since raw vectors don't have
@@ -1689,12 +1696,7 @@ def to_r(python_object: Any, R_variable_name: str, *,
         elif isinstance(python_object, int):
             if abs(python_object) > 2_147_483_647:
                 # Box in a PyArrow Array so the integer gets converted to a
-                # length-1 bit64::integer64 vector.
-                # Note: if the minimum value of the array is exactly
-                # -2147483648 (int32_min), all the -2147483648s will be
-                # converted to NA due to a bug in Arrow
-                # (github.com/apache/arrow/issues/40194). This is also a
-                # problem for non-scalar integer data.
+                # length-1 bit64::integer64 vector
                 result = to_r(pa.array([python_object]), (
                     f'pyarrow.array([{python_object_name}])', rmemory))
             else:
@@ -1807,10 +1809,14 @@ def to_r(python_object: Any, R_variable_name: str, *,
                                 '.\nConsider converting to Float64 before '
                                 'calling to_r().')
                         raise TypeError(error_message)
-                    # If any columns are pl.Object, fall back to converting to
-                    # dict, converting each column to R separately, then
-                    # converting to data.frame
-                    if pl.Object in unique_dtypes:
+                    # If any columns are pl.UInt32/pl.UInt64/pl.Int64 (which
+                    # we handle zero-copy as Series) or pl.Object, fall back to
+                    # converting to dict, converting each column to R
+                    # separately, then converting to data.frame
+                    if pl.UInt32 in unique_dtypes or \
+                            pl.UInt64 in unique_dtypes or \
+                            pl.Int64 in unique_dtypes or \
+                            pl.Object in unique_dtypes:
                         result = to_r(
                             python_object.to_dict(),
                             # deliberately leave python_object_name as-is (if
@@ -1829,7 +1835,6 @@ def to_r(python_object: Any, R_variable_name: str, *,
                             arr.combine_chunks() for arr in arrow],
                             schema=arrow.schema)
             elif is_series:
-                dtype = python_object.dtype
                 # Disallow Binary, Decimal, List, Array and Struct
                 if any(dtype == bad_dtype for bad_dtype in bad_dtypes):
                     error_message = (
@@ -1841,7 +1846,7 @@ def to_r(python_object: Any, R_variable_name: str, *,
                             '.\nConsider converting to Float64 before calling '
                             'to_r().')
                     raise TypeError(error_message)
-                if python_object.dtype == pl.Object:
+                if dtype == pl.Object:
                     arrow = _convert_object_to_arrow(
                         python_object,
                         f"{python_object_name} is a polars Series with "
@@ -1852,7 +1857,37 @@ def to_r(python_object: Any, R_variable_name: str, *,
                         arrow = None
                         result = to_r(python_object,
                                       (python_object_name, rmemory))
+                # View null-free, single-chunk UInt32 Series as int32 and
+                # UInt64/Int64 as double, to allow zero-copy. For UInt64/Int64,
+                # we will reinterpret the double array as bit64::integer64 on
+                # the R side by manually adding 'integer64' as a class.
+                elif dtype == pl.UInt32 and python_object.null_count() == 0 \
+                        and python_object.n_chunks() == 1:
+                    python_object = python_object\
+                        .to_numpy(allow_copy=False)\
+                        .view(np.int32)
+                    arrow = pa.array(python_object)
+                    is_ndarray = True
+                    is_polars = False
+                elif (dtype == pl.UInt64 or dtype == pl.Int64) and \
+                        python_object.null_count() == 0 and \
+                        python_object.n_chunks() == 1:
+                    python_object = python_object\
+                        .to_numpy(allow_copy=False)\
+                        .view(np.float64)
+                    arrow = pa.array(python_object)
+                    is_ndarray = True
+                    is_polars = False
+                    add_integer64 = True
                 else:
+                    # Match the unsigned behavior in the zero-copy case by
+                    # casting UInt32 to Int32 and UInt64 to Int64
+                    if dtype == pl.UInt32:
+                        python_object = python_object\
+                            .cast(pl.Int32, wrap_numerical=True)
+                    elif dtype == pl.UInt64:
+                        python_object = python_object\
+                            .cast(pl.Int64, wrap_numerical=True)
                     arrow = python_object.to_arrow()
             else:
                 error_message = (
@@ -2049,11 +2084,24 @@ def to_r(python_object: Any, R_variable_name: str, *,
                         python_object = python_object.astype({
                             col: float for col in
                             python_object.select_dtypes(['float128'])})
-                    # If any columns are complex or object, fall back to
+                    # If any columns are uint32/uint64/int64 (which we handle
+                    # zero-copy as Series), object, or complex, fall back to
                     # converting to dict, converting each column to R
                     # separately, then converting to data.frame
-                    if any(dtype == np.complex64 or dtype == np.complex128 or
-                           dtype == object for dtype in unique_dtypes):
+                    if any(dtype == np.uint32 or dtype == np.uint64 or
+                           dtype == np.int64 or dtype == object or
+                           dtype == pd.UInt32Dtype() or
+                           dtype == pd.UInt64Dtype() or
+                           dtype == pd.Int64Dtype() or
+                           (isinstance(dtype, pd.ArrowDtype) and (
+                                pa.types.is_uint32(
+                                    dtype.pyarrow_dtype.index_type) or
+                                pa.types.is_uint64(
+                                    dtype.pyarrow_dtype.index_type) or
+                                pa.types.is_int64(
+                                    dtype.pyarrow_dtype.index_type))) or
+                           dtype == np.complex64 or dtype == np.complex128
+                           for dtype in unique_dtypes):
                         result = to_r(
                             dict(python_object.items()),
                             # deliberately leave python_object_name as-is (if
@@ -2121,7 +2169,6 @@ def to_r(python_object: Any, R_variable_name: str, *,
                     pd.RangeIndex(len(python_object)))) or is_index:
                 # Disallow bytestring, IntervalDtype and SparseDtype columns
                 # as well as pd.ArrowDtype if its pyarrow dtype is unsupported
-                dtype = python_object.dtype
                 type_name = 'Series' if is_series else 'Index'
                 if str(dtype).startswith('|S'):
                     error_message = (
@@ -2212,7 +2259,41 @@ def to_r(python_object: Any, R_variable_name: str, *,
                                 result = to_r(python_object,
                                               (python_object_name, rmemory))
                         else:
-                            arrow = pa.array(python_object, from_pandas=True)
+                            # View uint32 as int32 and uint64/int64 as double,
+                            # to allow zero-copy. For uint64/int64, we will
+                            # reinterpret the double array as bit64::integer64
+                            # on the R side by manually adding 'integer64' as a
+                            # class.
+                            if dtype == np.uint32:
+                                arrow = pa.array(
+                                    python_object.values.view(np.int32))
+                            elif dtype == np.uint64 or dtype == np.int64:
+                                arrow = pa.array(
+                                    python_object.values.view(np.float64))
+                                add_integer64 = True
+                            elif isinstance(dtype, pd.ArrowDtype):
+                                # Match the unsigned behavior in the zero-copy
+                                # case by casting pa.uint32 to pa.int32 and
+                                # pa.uint64 to pa.int64
+                                arrow = python_object.array._pa_array
+                                if pa.types.is_uint32(dtype.pyarrow_dtype):
+                                    arrow = arrow\
+                                        .cast(pa.int32(), safe=False)
+                                elif pa.types.is_uint64(dtype.pyarrow_dtype):
+                                    arrow = arrow\
+                                        .cast(pa.int64(), safe=False)
+                            else:
+                                # Match the unsigned behavior in the zero-copy
+                                # case by casting UInt32Dtype to Int32Dtype and
+                                # UInt64Dtype to Int64Dtype
+                                if dtype == pd.UInt32Dtype():
+                                    python_object = python_object\
+                                        .astype(pd.Int32Dtype())
+                                elif dtype == pd.UInt64Dtype():
+                                    python_object = python_object\
+                                        .astype(pd.Int64Dtype())
+                                arrow = pa.array(python_object,
+                                                 from_pandas=True)
                         # Combine chunks when python_object is a
                         # pa.ChunkedArray instead of a pa.Array (which happens
                         # when converting an ArrowDtype DataFrame to a matrix,
@@ -2239,7 +2320,6 @@ def to_r(python_object: Any, R_variable_name: str, *,
                     f'dimension {max_dimension:,}, more than INT32_MAX '
                     f'(2,147,483,647), the maximum supported in R')
                 raise ValueError(error_message)
-            dtype = python_object.dtype
             if python_object.ndim == 0:  # generic or 0D ndarray
                 try:
                     is_nat = np.isnat(python_object)
@@ -2361,6 +2441,15 @@ def to_r(python_object: Any, R_variable_name: str, *,
                                 python_object.nbytes),
                             python_object.size * _ffi.sizeof('Rcomplex'))
                 else:
+                    # View uint32 as int32 and uint64/int64 as double, to allow
+                    # zero-copy. For uint64/int64, we will reinterpret the
+                    # double array as bit64::integer64 on the R side by
+                    # manually adding 'integer64' as a class.
+                    if dtype == np.uint32:
+                        python_object = python_object.view(np.int32)
+                    elif dtype == np.uint64 or dtype == np.int64:
+                        python_object = python_object.view(np.float64)
+                        add_integer64 = True
                     # Finally, convert to Arrow
                     flat_python_object = python_object.ravel('F')
                     if dtype == object:
@@ -2432,60 +2521,58 @@ def to_r(python_object: Any, R_variable_name: str, *,
                     'please install the Matrix R package to convert sparse '
                     'arrays or matrices to R')
                 raise ImportError(error_message)
-            args = rmemory.protect(_rlib.Rf_lcons(
-                _bytestring_to_character_vector(
-                    b'R' if is_csr else b'C' if is_csc else b'T', rmemory),
-                _rlib.R_NilValue))
-            _rlib.SET_TAG(args, _rlib.Rf_install(b'repr'))
-            args = rmemory.protect(_rlib.Rf_lcons(rmemory.protect(
-                _rlib.Rf_ScalarLogical(0)), args))
-            _rlib.SET_TAG(args, _rlib.Rf_install(b'index1'))
-            if rownames is not None or colnames is not None:
-                dimnames = rmemory.protect(
-                    _rlib.Rf_allocVector(_rlib.VECSXP, 2))
-                _rlib.SET_VECTOR_ELT(dimnames, 0, rownames
-                    if rownames is not None else _rlib.R_NilValue)
-                _rlib.SET_VECTOR_ELT(dimnames, 1, colnames
-                    if colnames is not None else _rlib.R_NilValue)
-                args = rmemory.protect(_rlib.Rf_lcons(dimnames, args))
-                _rlib.SET_TAG(args, _rlib.R_DimNamesSymbol)
+            
+            # Create empty dgCMatrix, dgRMatrix or dgTMatrix
+            result = rmemory.protect(
+                _rlib.R_do_new_object(_rlib.R_getClassDef(
+                    b'dgRMatrix' if is_csr else b'dgCMatrix' if is_csc else
+                    b'dgTMatrix')))
+        
+            # Assign data (x)
+            _rlib.R_do_slot_assign(result, _rlib.Rf_install(b'x'),
+                to_r(python_object.data, (
+                    f'{python_object_name}.data', rmemory)))
+        
+            # Assign indices (i/j) and indptr (p)
+            if is_coo:
+                _rlib.R_do_slot_assign(
+                    result, _rlib.Rf_install(b'i'),
+                    to_r(python_object.row.astype(np.int32, copy=False), (
+                        f'{python_object_name}.row', rmemory)))
+                _rlib.R_do_slot_assign(
+                    result, _rlib.Rf_install(b'j'),
+                    to_r(python_object.col.astype(np.int32, copy=False), (
+                        f'{python_object_name}.col', rmemory)))
+            else:
+                _rlib.R_do_slot_assign(
+                    result, _rlib.Rf_install(b'i' if is_csc else b'j'),
+                    to_r(python_object.indices.astype(np.int32, copy=False), (
+                        f'{python_object_name}.indices', rmemory)))
+                _rlib.R_do_slot_assign(result, _rlib.Rf_install(b'p'),
+                    to_r(python_object.indptr.astype(np.int32, copy=False), (
+                        f'{python_object_name}.indptr', rmemory)))
+        
+            # Assign dims
             dims = rmemory.protect(_rlib.Rf_allocVector(_rlib.INTSXP, 2))
             _rlib.INTEGER(dims)[0] = python_object.shape[0]
             _rlib.INTEGER(dims)[1] = python_object.shape[1]
-            args = rmemory.protect(_rlib.Rf_lcons(dims, args))
-            _rlib.SET_TAG(args, _rlib.Rf_install(b'dims'))
-            args = rmemory.protect(
-                _rlib.Rf_lcons(to_r(python_object.data, (
-                    f'{python_object_name}.data', rmemory)), args))
-            _rlib.SET_TAG(args, _rlib.Rf_install(b'x'))
-            if is_coo:
-                args = rmemory.protect(
-                    _rlib.Rf_lcons(to_r(python_object.col, (
-                        f'{python_object_name}.col', rmemory)), args))
-                _rlib.SET_TAG(args, _rlib.Rf_install(b'j'))
-                args = rmemory.protect(
-                    _rlib.Rf_lcons(to_r(python_object.row, (
-                        f'{python_object_name}.row', rmemory)), args))
-                _rlib.SET_TAG(args, _rlib.Rf_install(b'i'))
-            else:
-                args = rmemory.protect(
-                    _rlib.Rf_lcons(to_r(python_object.indptr, (
-                        f'{python_object_name}.indptr', rmemory)), args))
-                _rlib.SET_TAG(args, _rlib.Rf_install(b'p'))
-                args = rmemory.protect(
-                    _rlib.Rf_lcons(to_r(python_object.indices, (
-                        f'{python_object_name}.indices', rmemory)), args))
-                _rlib.SET_TAG(args, _rlib.Rf_install(b'i' if is_csc else b'j'))
-            function_call = rmemory.protect(
-                _rlib.Rf_lcons(rmemory.protect(
-                    _rlib.Rf_lang3(
-                        _rlib.R_DoubleColonSymbol,
-                        _rlib.Rf_install(b'Matrix'),
-                        _rlib.Rf_install(b'sparseMatrix'))),
-                    args))
-            result = _call(function_call, rmemory,
-                           f'cannot construct a sparse array from '
-                           f'{python_object_name} with Matrix::sparseMatrix')
+            _rlib.R_do_slot_assign(result, _rlib.Rf_install(b'Dim'), dims)
+            
+            # Assign dimnames
+            dimnames = rmemory.protect(
+                _rlib.Rf_allocVector(_rlib.VECSXP, 2))
+            _rlib.SET_VECTOR_ELT(dimnames, 0, rownames
+                if rownames is not None else _rlib.R_NilValue)
+            _rlib.SET_VECTOR_ELT(dimnames, 1, colnames
+                if colnames is not None else _rlib.R_NilValue)
+            _rlib.R_do_slot_assign(result, _rlib.Rf_install(b'Dimnames'),
+                                   dimnames)
+        
+            # Assign factors (empty list)
+            _rlib.R_do_slot_assign(result, _rlib.Rf_install(b'factors'),
+                                   rmemory.protect(
+                                       _rlib.Rf_allocVector(_rlib.VECSXP, 0)))
+
         # Let Arrow handle conversions of temporal types
         elif isinstance(python_object, (datetime.date, datetime.datetime,
                                         datetime.time, datetime.timedelta)):
@@ -2593,16 +2680,16 @@ def to_r(python_object: Any, R_variable_name: str, *,
         # and colnames
         if is_multidimensional_ndarray or is_df and format == 'matrix' and \
                 not converted_index_separately:
-            # For difftime and vctrs::unspecified, manually add array and (if
-            # 2D) matrix as classes (R's array()/matrix() functions do this
+            # For difftime and vctrs::unspecified, manually add 'array' and (if
+            # 2D) 'matrix' as classes (R's array()/matrix() functions do this
             # too, but also overwrite any existing clases, like difftime)
             if _rlib.Rf_inherits(result, b'difftime') or \
                     _rlib.Rf_inherits(result, b'vctrs_unspecified'):
+                classes_to_add = (b'array',) \
+                    if is_ndarray and python_object.ndim > 2 else \
+                    (b'matrix', b'array')
                 classes = _rlib.Rf_getAttrib(result, _rlib.R_ClassSymbol)
                 num_classes = _rlib.Rf_xlength(classes)
-                classes_to_add = \
-                    (b'array',) if is_ndarray and python_object.ndim > 2 else \
-                        (b'matrix', b'array')
                 new_classes = rmemory.protect(
                     _rlib.Rf_allocVector(_rlib.STRSXP,
                                          num_classes + len(classes_to_add)))
@@ -2668,8 +2755,22 @@ def to_r(python_object: Any, R_variable_name: str, *,
                     raise ValueError(error_message)
             _rlib.Rf_setAttrib(result, _rlib.R_RowNamesSymbol if is_df else
                                        _rlib.R_NamesSymbol, rownames)
+        # For int64 and uint64, manually add 'integer64' as a class (otherwise
+        # the result would just be a vector of doubles)
+        if add_integer64:
+            classes = _rlib.Rf_getAttrib(result, _rlib.R_ClassSymbol)
+            num_classes = _rlib.Rf_xlength(classes)
+            new_classes = rmemory.protect(
+                _rlib.Rf_allocVector(_rlib.STRSXP, num_classes + 1))
+            for i in range(num_classes):
+                _rlib.SET_STRING_ELT(new_classes, i,
+                                     _rlib.STRING_ELT(classes, i))
+            _rlib.SET_STRING_ELT(
+                new_classes, num_classes,
+                _rlib.Rf_mkCharLenCE(b'integer64', 9, _rlib.CE_UTF8))
+            _rlib.Rf_setAttrib(result, _rlib.R_ClassSymbol, new_classes)
         # If converting 2D NumPy array -> data.frame, convert result (which is
-        # now an R matrix/array) to a data.frame with as.data.frame().
+        # now an R matrix/array) to a data.frame with as.data.frame()
         if is_matrix and format == 'data.frame':
             function_call = rmemory.protect(
                 _rlib.Rf_lang2(_rlib.Rf_install(b'as.data.frame'), result))
@@ -3221,18 +3322,40 @@ def to_py(R_statement: str, *,
             # once its docs are updated (github.com/apache/arrow/issues/39198).
             # See github.com/rpy2/rpy2-arrow/blob/main/rpy2_arrow/arrow.py for
             # a reference implementation.
-            # Convert the vector to an Arrow array via arrow::Array$create()
             if R_arrow_array is None:
                 arrow_namespace = rmemory.protect(
                     _rlib.R_FindNamespace(_bytestring_to_character_vector(
                         b'arrow', rmemory)))
-                # Use arrow::as_arrow_array(R_object, type=arrow::duration(
-                # 'ns')) for timedeltas (i.e. difftimes without the hms class)
-                # and arrow::as_arrow_array(R_object, type=arrow::time64('ns'))
-                # for times (which have both the difftime and hms classes) to
-                # work around github.com/apache/arrow/issues/40109
                 if R_object_type == _rlib.REALSXP and \
+                        _rlib.Rf_inherits(R_object, b'integer64'):
+                    # Use arrow::as_arrow_array(R_object, type=arrow::int64())
+                    # for bit64::integer64 arrays. Arrow is not fooled by our
+                    # hack in to_r() of reinterpreting int64/uint64 arrays as
+                    # double and then adding 'integer64' as a class in to_r(),
+                    # and will convert these arrays to a DoubleArray with
+                    # arrow::Array$create().
+                    as_arrow_array = _rlib.Rf_findVarInFrame(
+                        arrow_namespace, _rlib.Rf_install(b'as_arrow_array'))
+                    function_call = rmemory.protect(_rlib.Rf_lang1(
+                        _rlib.Rf_findVarInFrame(
+                            arrow_namespace, _rlib.Rf_install(b'int64'))))
+                    int64 = _call(function_call, rmemory,
+                                  'cannot get arrow::int64')
+                    function_call = rmemory.protect(_rlib.Rf_lang3(
+                        as_arrow_array, R_object, int64))
+                    _rlib.SET_TAG(_rlib.CDDR(function_call),
+                                  _rlib.Rf_install(b'type'))
+                    R_arrow_array = _call(function_call, rmemory,
+                                          f'cannot convert {R_statement!r} to '
+                                          f'an arrow int64 Array')
+                elif R_object_type == _rlib.REALSXP and \
                         _rlib.Rf_inherits(R_object, b'difftime'):
+                    # Use arrow::as_arrow_array(R_object, type=arrow::duration(
+                    # 'ns')) for timedeltas (i.e. difftimes without the hms
+                    # class) and arrow::as_arrow_array(R_object,
+                    # type=arrow::time64('ns')) for times (which have both the
+                    # difftime and hms classes) to work around
+                    # github.com/apache/arrow/issues/40109.
                     as_arrow_array = _rlib.Rf_findVarInFrame(
                         arrow_namespace, _rlib.Rf_install(b'as_arrow_array'))
                     hms = _rlib.Rf_inherits(R_object, b'hms')
@@ -3250,9 +3373,9 @@ def to_py(R_statement: str, *,
                         _string_to_character_vector(time_unit, rmemory)))
                     duration = _call(
                         function_call, rmemory,
-                        f"cannot get arrow::"
-                        f"{duration_or_time64_name.decode('utf-8')}"
-                        f"({time_unit}')")
+                        f'cannot get arrow::'
+                        f'{duration_or_time64_name.decode("utf-8")}'
+                        f'({time_unit!r})')
                     function_call = rmemory.protect(_rlib.Rf_lang3(
                         as_arrow_array, R_object, duration))
                     _rlib.SET_TAG(_rlib.CDDR(function_call),
@@ -3262,6 +3385,8 @@ def to_py(R_statement: str, *,
                                           f'an arrow duration[{time_unit}] '
                                           f'Array')
                 else:
+                    # Convert the vector to an Arrow array via
+                    # arrow::Array$create()
                     Array = _rlib.Rf_eval(_rlib.Rf_findVarInFrame(
                         arrow_namespace, _rlib.Rf_install(b'Array')),
                         _rlib.R_BaseEnv)
@@ -3685,7 +3810,8 @@ if _jupyter_notebook:
 # Do ryp initialization that requires R to be initialized
 
 r(f'q = quit = function(...) {{ cat("Press {_EOF_instructions} to exit '
-  f'the Python terminal, or run exit()\n") }}')
+  f'the Python terminal, or run exit()\n") }}; '
+  f'options(arrow.int64_downcast = FALSE)')
 
 # Now that we're at the very end of the module, reset the KeyboardInterrupt
 # signal handler to the default one. (This would still be necessary even if we

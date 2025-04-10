@@ -327,6 +327,22 @@ if ("ryp" %in% commandArgs()) {
 
 ### Python to R (`to_r()`)
 
+Arrays and Series with `float64`, `int32`, `int64`, `uint32`, and `uint64` data 
+types will be converted without copying the underlying data ("zero-copy"). This 
+is extremely fast but comes with two important caveats:
+
+1. Modifying the data in R will also modify it in Python, and vice versa.
+2. Because R lacks support for unsigned integers, `uint32` values will be 
+   reinterpreted as `int32` and `uint64` values will be reinterpreted as 
+   `int64`. This means that for `uint32`, `2_147_483_648` (`INT32_MAX + 1`) 
+   will become `NA` and larger values will become negative numbers. For 
+   `uint64`, `9_223_372_036_854_775_808` (`INT64_MAX + 1`) will become `NA` and 
+   larger values will become negative numbers.
+
+Polars Series with `null` values or multiple chunks, and pandas Series with
+non-NumPy data types, will *not* be converted zero-copy, but are still subject 
+to caveat #2.
+
 | Python                                                                  | R                                                                                                         |
 |-------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------|
 | `None`                                                                  | `NULL` (if scalar) or `NA` (if inside NumPy, pandas or polars)                                            |
@@ -357,74 +373,70 @@ if ("ryp" %in% commandArgs()) {
 
 #### NumPy data types
 
-| Python                                      | R                                                              |
-|---------------------------------------------|----------------------------------------------------------------|
-| `bool`                                      | `logical`                                                      |
-| `int8`, `uint8`, `int16`, `uint16`, `int32` | `integer`                                                      |
-| `uint32`, `uint64`                          | `integer` (if `x <= 2_147_483_647`) or `numeric`               |
-| `int64`                                     | `integer` (if `abs(x) <= 2_147_483_647`) or `bit64::integer64` |
-| `float16`, `float32`, `float64`, `float128` | `numeric` (note: `float128` loses precision)                   |
-| `complex64`, `complex128`                   | `complex`                                                      |
-| `bytes` (e.g. `'S1'`)                       | --                                                             |
-| `str`/`unicode` (e.g. `'U1'`)               | `character`                                                    |
-| `datetime64`                                | `POSIXct`                                                      | 
-| `timedelta64`                               | `difftime(units='secs')`                                       |
-| `void` (unstructured)                       | `raw`                                                          |
-| `void` (structured)                         | --                                                             |
-| `object`                                    | depends on the contents<sup>&Dagger;</sup>                     |
+| Python                                                | R                                          |
+|-------------------------------------------------------|--------------------------------------------|
+| `bool`                                                | `logical`                                  |
+| `int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32` | `integer`                                  |
+| `int64`, `uint64`                                     | `bit64::integer64`                         |
+| `float16`, `float32`, `float64`, `float128`           | `numeric`                                  |
+| `complex64`, `complex128`                             | `complex`                                  |
+| `bytes` (e.g. `'S1'`)                                 | --                                         |
+| `str`/`unicode` (e.g. `'U1'`)                         | `character`                                |
+| `datetime64`                                          | `POSIXct`                                  | 
+| `timedelta64`                                         | `difftime(units='secs')`                   |
+| `void` (unstructured)                                 | `raw`                                      |
+| `void` (structured)                                   | --                                         |
+| `object`                                              | depends on the contents<sup>&Dagger;</sup> |
 
 #### pandas-specific data types
 
-| Python                                                               | R                                                              |
-|----------------------------------------------------------------------|----------------------------------------------------------------|
-| `BooleanDtype`                                                       | `logical`                                                      |
-| `Int8Dtype`, `UInt8Dtype`, `Int16Dtype`, `UInt16Dtype`, `Int32Dtype` | `integer`                                                      |
-| `UInt32Dtype`, `UInt64Dtype`                                         | `integer` (if `x <= 2_147_483_647`) or `numeric`               |
-| `Int64Dtype`                                                         | `integer` (if `abs(x) <= 2_147_483_647`) or `bit64::integer64` |  
-| `Float32Dtype`, `Float64Dtype`                                       | `numeric`                                                      |
-| `StringDtype`                                                        | `character`                                                    |
-| `CategoricalDtype(ordered=False)`                                    | unordered `factor`                                             |
-| `CategoricalDtype(ordered=True)`                                     | ordered `factor`                                               |
-| `DatetimeTZDtype`, `PeriodDtype`                                     | `POSIXct`                                                      |
-| `IntervalDtype`, `SparseDtype`                                       | --                                                             |
+| Python                                                                              | R                  |
+|-------------------------------------------------------------------------------------|--------------------|
+| `BooleanDtype`                                                                      | `logical`          |
+| `Int8Dtype`, `UInt8Dtype`, `Int16Dtype`, `UInt16Dtype`, `Int32Dtype`, `UInt32Dtype` | `integer`          |
+| `Int64Dtype`, `UInt64Dtype`                                                         | `bit64::integer64` |  
+| `Float32Dtype`, `Float64Dtype`                                                      | `numeric`          |
+| `StringDtype`                                                                       | `character`        |
+| `CategoricalDtype(ordered=False)`                                                   | unordered `factor` |
+| `CategoricalDtype(ordered=True)`                                                    | ordered `factor`   |
+| `DatetimeTZDtype`, `PeriodDtype`                                                    | `POSIXct`          |
+| `IntervalDtype`, `SparseDtype`                                                      | --                 |
 
 #### pandas Arrow data types (`pd.ArrowDtype`)
 
-| Python                                                     | R                                                              |
-|------------------------------------------------------------|----------------------------------------------------------------|
-| `pa.bool_`                                                 | `logical`                                                      |
-| `pa.int8`, `pa.uint8`, `pa.int16`, `pa.uint16`, `pa.int32` | `integer`                                                      |
-| `pa.uint32`, `pa.uint64`                                   | `integer` (if `x <= 2_147_483_647`) or `numeric`               |
-| `pa.int64`                                                 | `integer` (if `abs(x) <= 2_147_483_647`) or `bit64::integer64` |
-| `pa.float32`, `pa.float64`                                 | `numeric`                                                      |
-| `pa.string`, `pa.large_string`                             | `character`                                                    |
-| `pa.date32`                                                | `Date`                                                         |
-| `pa.date64`, `pa.timestamp`                                | `POSIXct`                                                      |
-| `pa.duration`                                              | `difftime(units='secs')`                                       |
-| `pa.time32`, `pa.time64`                                   | `hms::hms`                                                     |
-| `pa.dictionary(any integer type, pa.string(), ordered=0)`  | unordered `factor`                                             |
-| `pa.dictionary(any integer type, pa.string(), ordered=1)`  | ordered `factor`                                               |
-| `pa.null()`                                                | `vctrs::unspecified`                                           |
+| Python                                                                  | R                        |
+|-------------------------------------------------------------------------|--------------------------|
+| `pa.bool_`                                                              | `logical`                |
+| `pa.int8`, `pa.uint8`, `pa.int16`, `pa.uint16`, `pa.int32`, `pa.uint32` | `integer`                |
+| `pa.int64`, `pa.uint64`                                                 | `bit64::integer64`       |
+| `pa.float32`, `pa.float64`                                              | `numeric`                |
+| `pa.string`, `pa.large_string`                                          | `character`              |
+| `pa.date32`                                                             | `Date`                   |
+| `pa.date64`, `pa.timestamp`                                             | `POSIXct`                |
+| `pa.duration`                                                           | `difftime(units='secs')` |
+| `pa.time32`, `pa.time64`                                                | `hms::hms`               |
+| `pa.dictionary(any integer type, pa.string(), ordered=0)`               | unordered `factor`       |
+| `pa.dictionary(any integer type, pa.string(), ordered=1)`               | ordered `factor`         |
+| `pa.null()`                                                             | `vctrs::unspecified`     |
 
 #### Polars data types
 
-| Python                                      | R                                                              |
-|---------------------------------------------|----------------------------------------------------------------|
-| `Boolean`                                   | `logical`                                                      |
-| `Int8`, `UInt8`, `Int16`, `UInt16`, `Int32` | `integer`                                                      |
-| `UInt32`, `UInt64`                          | `integer` (if `x <= 2_147_483_647`) or `numeric`               |
-| `Int64`                                     | `integer` (if `abs(x) <= 2_147_483_647`) or `bit64::integer64` |
-| `Float32`, `Float64`                        | `numeric`                                                      |
-| `Date`                                      | `Date`                                                         |
-| `Datetime`                                  | `POSIXct`                                                      |
-| `Duration`                                  | `difftime(units='secs')`                                       |
-| `Time`                                      | `hms::hms`                                                     |
-| `String`                                    | `character`                                                    |
-| `Categorical`                               | unordered `factor`                                             |
-| `Enum`                                      | ordered `factor`                                               |
-| `Object`                                    | depends on the contents<sup>&Dagger;</sup>                     |
-| `Null`                                      | `vctrs::unspecified`                                           | 
-| `Binary`, `Decimal`, `List`, `Array`        | --                                                             |
+| Python                                                | R                                          |
+|-------------------------------------------------------|--------------------------------------------|
+| `Boolean`                                             | `logical`                                  |
+| `Int8`, `UInt8`, `Int16`, `UInt16`, `Int32`, `UInt32` | `integer`                                  |
+| `Int64`, `UInt64`                                     | `bit64::integer64`                         |
+| `Float32`, `Float64`                                  | `numeric`                                  |
+| `Date`                                                | `Date`                                     |
+| `Datetime`                                            | `POSIXct`                                  |
+| `Duration`                                            | `difftime(units='secs')`                   |
+| `Time`                                                | `hms::hms`                                 |
+| `String`                                              | `character`                                |
+| `Categorical`                                         | unordered `factor`                         |
+| `Enum`                                                | ordered `factor`                           |
+| `Object`                                              | depends on the contents<sup>&Dagger;</sup> |
+| `Null`                                                | `vctrs::unspecified`                       | 
+| `Binary`, `Decimal`, `List`, `Array`                  | --                                         |
 
 #### Notes
 
