@@ -367,9 +367,9 @@ to caveat #2.
 | 2D NumPy array                                                          | `data.frame` (if `format == 'data.frame'`) or matrix<sup>&dagger;</sup>                                   |
 | &ge; 3D NumPy array                                                     | array<sup>&dagger;</sup>                                                                                  |
 | 0D NumPy array (e.g. `np.array(1)`), NumPy generic (e.g. `np.int32(1)`) | length-1 vector                                                                                           |
-| `csr_array`, `csr_matrix`                                               | `dgRMatrix` (if int or float), `lgRMatrix` (if boolean), -- (if complex)                                  | 
-| `csc_array`, `csc_matrix`                                               | `dgCMatrix` (if int or float), `lgCMatrix` (if boolean), -- (if complex)                                  |
-| `coo_array`, `coo_matrix`                                               | `dgTMatrix` (if int or float), `lgTMatrix` (if boolean), -- (if complex)                                  |
+| `csr_array`, `csr_matrix`                                               | `dgRMatrix` (if `float64`), `lgRMatrix` (if `bool`), -- (otherwise)                                       | 
+| `csc_array`, `csc_matrix`                                               | `dgCMatrix` (if `float64`), `lgCMatrix` (if `bool`), -- (otherwise)                                       |
+| `coo_array`, `coo_matrix`                                               | `dgTMatrix` (if `float64`), `lgTMatrix` (if `bool`), -- (otherwise)                                       |
 
 #### NumPy data types
 
@@ -471,6 +471,13 @@ additional notes on ryp's handling of object data types:
 
 ### R to Python (`to_py()`)
 
+Unlike `to_r()`, zero-copy conversion is only guaranteed when:
+1. The data being converted is backed by an Arrow array. This is the case for 
+   data that was previously converted from Python with `to_py()`, or that the 
+   user created manually from an Arrow array.
+2. The data is integer (i.e. `int32`) or numeric (i.e. `float64`).
+3. The data is being converted to a NumPy array or polars Series.
+
 | R                                                                            | Python                                                                                                                                                                                        |
 |------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `NULL`                                                                       | `None`                                                                                                                                                                                        |
@@ -486,9 +493,9 @@ additional notes on ryp's handling of object data types:
 | &ge; 3D array                                                                | NumPy array                                                                                                                                                                                   |  
 | unnamed list                                                                 | `list`                                                                                                                                                                                        |
 | named list, S3 object, S4 object, environment, S6 object                     | `dict`                                                                                                                                                                                        |
-| `dgRMatrix`                                                                  | `csr_array(dtype='int32')`                                                                                                                                                                    |
-| `dgCMatrix`                                                                  | `csc_array(dtype='int32')`                                                                                                                                                                    |
-| `dgTMatrix`                                                                  | `coo_array(dtype='int32')`                                                                                                                                                                    |
+| `dgRMatrix`                                                                  | `csr_array(dtype='float64')`                                                                                                                                                                  |
+| `dgCMatrix`                                                                  | `csc_array(dtype='float64')`                                                                                                                                                                  |
+| `dgTMatrix`                                                                  | `coo_array(dtype='float64')`                                                                                                                                                                  |
 | `lgRMatrix`, `ngRMatrix`                                                     | `csr_array(dtype=bool)`                                                                                                                                                                       |
 | `lgCMatrix`, `ngCMatrix`                                                     | `csc_array(dtype=bool)`                                                                                                                                                                       |
 | `lgTMatrix`, `ngTMatrix`                                                     | `coo_array(dtype=bool)`                                                                                                                                                                       |

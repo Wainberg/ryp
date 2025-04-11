@@ -2,6 +2,7 @@ from __future__ import annotations
 import cffi
 import _cffi_backend
 import datetime
+import numpy as np
 import os
 import platform
 import re
@@ -630,7 +631,6 @@ def _check_object_elements(python_object: Any,
                           they are subtypes of allowed_types (e.g. bool -> int)
         allowed_dtypes: the allowed NumPy dtypes of the elements, if np.generic
     """
-    import numpy as np
     values = python_object.values if is_pandas else python_object
     if not all(element is None or isinstance(element, allowed_types) and
                not isinstance(element, disallowed_types) or
@@ -659,7 +659,6 @@ def _convert_object_to_arrow(python_object: Any,
     Returns:
         python_object, converted to Arrow (or to complex, if complex).
     """
-    import numpy as np
     with ignore_sigint():
         import pyarrow as pa
     arrow = None
@@ -1488,20 +1487,12 @@ def to_r(python_object: Any, R_variable_name: str, *,
             f'but must be a string')
         raise TypeError(error_message)
     # Get preliminary information about what type python_object is
-    if 'numpy' in sys.modules:
-        import numpy as np
-        is_ndarray = isinstance(python_object, np.ndarray)
-        is_matrix = is_ndarray and python_object.ndim == 2
-        is_multidimensional_ndarray = is_ndarray and python_object.ndim >= 2
-        is_numpy_generic = isinstance(python_object, np.generic)
-        is_numpy = is_ndarray or is_numpy_generic
-    else:
-        is_ndarray = False
-        is_matrix = False
-        is_multidimensional_ndarray = False
-        is_numpy = False
+    is_ndarray = isinstance(python_object, np.ndarray)
+    is_matrix = is_ndarray and python_object.ndim == 2
+    is_multidimensional_ndarray = is_ndarray and python_object.ndim >= 2
+    is_numpy_generic = isinstance(python_object, np.generic)
+    is_numpy = is_ndarray or is_numpy_generic
     if 'scipy' in sys.modules:
-        import numpy as np
         from scipy.sparse import csr_array, csc_array, coo_array, \
             csr_matrix, csc_matrix, coo_matrix
         if isinstance(python_object, csr_array):
@@ -1545,7 +1536,6 @@ def to_r(python_object: Any, R_variable_name: str, *,
     else:
         is_sparse = False
     if 'pandas' in sys.modules:
-        import numpy as np
         import pandas as pd
         is_pandas_df = isinstance(python_object, pd.DataFrame)
         is_pandas_series = isinstance(python_object, pd.Series)
@@ -1641,7 +1631,6 @@ def to_r(python_object: Any, R_variable_name: str, *,
             error_message = \
                 f'rownames has unsupported type {type(rownames).__name__!r}'
             raise TypeError(error_message)
-        import numpy as np
         python_object = np.empty((len(rownames), 0))
         is_df = is_polars = False
         is_numpy = is_ndarray = is_matrix = is_multidimensional_ndarray = True
@@ -2094,12 +2083,9 @@ def to_r(python_object: Any, R_variable_name: str, *,
                            dtype == pd.UInt64Dtype() or
                            dtype == pd.Int64Dtype() or
                            (isinstance(dtype, pd.ArrowDtype) and (
-                                pa.types.is_uint32(
-                                    dtype.pyarrow_dtype.index_type) or
-                                pa.types.is_uint64(
-                                    dtype.pyarrow_dtype.index_type) or
-                                pa.types.is_int64(
-                                    dtype.pyarrow_dtype.index_type))) or
+                                pa.types.is_uint32(dtype.pyarrow_dtype) or
+                                pa.types.is_uint64(dtype.pyarrow_dtype) or
+                                pa.types.is_int64(dtype.pyarrow_dtype))) or
                            dtype == np.complex64 or dtype == np.complex128
                            for dtype in unique_dtypes):
                         result = to_r(
@@ -2509,24 +2495,28 @@ def to_r(python_object: Any, R_variable_name: str, *,
                     f'more than INT32_MAX (2,147,483,647), the maximum '
                     f'supported in R')
                 raise ValueError(error_message)
-            if python_object.dtype == np.complex64 or \
-                    python_object.dtype == np.complex128:
-                error_message = (
-                    f'{python_object_name} is a complex '
-                    f'{type(python_object).__name__!r}, which is not '
-                    f'supported in R')
-                raise TypeError(error_message)
             if not _require(b'Matrix', rmemory):
                 error_message = (
                     'please install the Matrix R package to convert sparse '
                     'arrays or matrices to R')
                 raise ImportError(error_message)
+            if python_object.dtype == np.float64:
+                dtype_code = b'd'
+            elif python_object.dtype == bool:
+                dtype_code = b'l'
+            else:
+                error_message = (
+                    f'{python_object_name} is a '
+                    f'{type(python_object).__name__!r} of data type '
+                    f'{python_object.dtype}, which is not supported in R')
+                raise TypeError(error_message)
             
-            # Create empty dgCMatrix, dgRMatrix or dgTMatrix
+            # Create empty *gCMatrix, *gRMatrix or *gTMatrix
             result = rmemory.protect(
                 _rlib.R_do_new_object(_rlib.R_getClassDef(
-                    b'dgRMatrix' if is_csr else b'dgCMatrix' if is_csc else
-                    b'dgTMatrix')))
+                    dtype_code + b'gRMatrix' if is_csr else
+                    dtype_code + b'gCMatrix' if is_csc else
+                    dtype_code + b'gTMatrix')))
         
             # Assign data (x)
             _rlib.R_do_slot_assign(result, _rlib.Rf_install(b'x'),
@@ -3112,7 +3102,6 @@ def to_py(R_statement: str, *,
                     raise ImportError(error_message) from e
                 return pl.DataFrame(result)
             elif format == 'numpy':
-                import numpy as np
                 if result:
                     return np.stack(tuple(result.values()), axis=1)
                 else:
@@ -3165,7 +3154,6 @@ def to_py(R_statement: str, *,
             sparse_matrix_class = classes & _sparse_matrix_classes
             if sparse_matrix_class:
                 sparse_matrix_class = sparse_matrix_class.pop()
-                import numpy as np
                 from scipy.sparse import csr_array, csc_array, coo_array
                 if sparse_matrix_class[0] == ord(b'n'):
                     function_call = rmemory.protect(
@@ -3454,8 +3442,8 @@ def to_py(R_statement: str, *,
                     f"Re({R_statement}) and Im({R_statement}) and converting "
                     f"them separately.")
                 raise TypeError(error_message)
-            import numpy as np
             # Need to copy() to avoid sharing memory with R, which is dangerous
+            # without Arrow's mechanism for lifetime management
             result = np.frombuffer(_ffi.buffer(
                 _rlib.COMPLEX(R_object),
                 _rlib.Rf_xlength(R_object) * _ffi.sizeof('Rcomplex')),
@@ -3519,7 +3507,17 @@ def to_py(R_statement: str, *,
                 index = False
         if format == 'numpy':
             if R_object_type != _rlib.CPLXSXP:
-                result = result.to_numpy(zero_copy_only=False, writable=True)
+                if result.null_count == 0 and (
+                        pa.types.is_integer(result.type) or
+                        pa.types.is_floating(result.type)):
+                    # Create a writable NumPy array from the Arrow buffer
+                    # without copying (hacky)
+                    result = np.frombuffer(result.buffers()[-1],
+                                           dtype=result.type.to_pandas_dtype())
+                else:
+                    # Copy to a NumPy array
+                    result = result.to_numpy(zero_copy_only=False,
+                                             writable=True)
                 # If R_object is a matrix, reshape only once result is a NumPy
                 # array since Arrow doesn't have a notion of memory-contiguous
                 # 2D arrays
