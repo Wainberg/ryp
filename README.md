@@ -614,8 +614,8 @@ arrays['floats']
      interpreter, which does not interact with any other process's R
      interpreter.
   2. Multiprocessing in R (e.g. via the `parallel` or `future` packages). This
-     is often much easier than option 1 (e.g. just replace for loops/`lapply()`
-     with `mclapply()`), and will have similar performance.
+     is often much easier than multiprocessing in Python (e.g. just replace for
+     loops/`lapply()` with `mclapply()`), and will have similar performance.
   3. Multithreading in R (e.g. via the `RcppParallel` or `RhpcBLASctl`
      packages), if you are using an R package that wraps multithreaded C/C++
      code. If your R package supports it, this is the fastest and easiest
