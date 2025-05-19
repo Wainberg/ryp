@@ -67,7 +67,8 @@ def _get_rlib_path(R_home: str) -> str:
     Based on the rpy2.situation.get_rlib_path function.
     
     Args:
-        R_home: the path to the R home directory, as determined by get_R_home()
+        R_home: the path to the R home directory, as determined by
+                _get_R_home()
     
     Returns:
         The path to the R shared library.
