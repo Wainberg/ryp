@@ -49,6 +49,7 @@ inside R.
   - [R to Python (`to_py()`)](#r-to-python-to_py)
     - [Data types](#data-types)
 - [Examples](#examples)
+- [Limitations](#limitations)
 
 ## Installation
 
@@ -602,3 +603,21 @@ arrays['floats']
 # row1   0.5   1.5
 # row2   2.5   3.5
 ```
+
+## Limitations
+
+- The R interpreter is not thread-safe, so ryp can't be used by multiple Python
+  threads simultaneously. (This limitation is shared by rpy2.) If you need
+  parallelism, you will need to use one of the following:
+  1. Multiprocessing in Python (e.g. via the `multiprocessing` library). Behind
+     the scenes, each Python process will use ryp to create its own dedicated R
+     interpreter, which does not interact with any other process's R
+     interpreter.
+  2. Multiprocessing in R (e.g. via the `parallel` or `future` packages). This
+     is often much easier than option 1 (e.g. just replace for loops/`lapply()`
+     with `mclapply()`), and will have similar performance.
+  3. Multithreading in R (e.g. via the `RcppParallel` or `RhpcBLASctl`
+     packages), if you are using an R package that wraps multithreaded C/C++
+     code. If your R package supports it, this is the fastest and easiest
+     option, since it merely requires an environment variable or R one-liner to
+     set the number of threads.

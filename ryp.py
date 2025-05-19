@@ -9,8 +9,8 @@ import re
 import signal
 import subprocess
 import sys
+import threading
 import warnings
-from threading import Thread
 from typing import Any, Literal
 
 
@@ -293,6 +293,13 @@ def _initialize_R() -> tuple[cffi.FFI, _cffi_backend.Lib]:
         raise RuntimeError(error_message)
     # Set R_HOME (required for Rf_initialize_R to not crash)
     os.environ['R_HOME'] = R_home
+    # Disallow parallel execution
+    if threading.current_thread() is not threading.main_thread():
+        error_message = (
+            "the R interpreter is not thread-safe, so ryp can't be used by "
+            "multiple Python threads simultaneously; see the README for "
+            "alternative parallelization strategies")
+        raise RuntimeError(error_message)
     # Before initializing R, disable KeyboardInterrupts until the end of module
     # import. Otherwise, the import will fail, and Python will re-import ryp
     # from the beginning, re-running _initialize_R() and triggering the error
@@ -1394,8 +1401,8 @@ def r(R_code: str = ...) -> None:
                 global _plot_event_thread
                 if (_plot_event_thread is None or not
                         _plot_event_thread.is_alive()) and _plot_window_open():
-                    _plot_event_thread = Thread(target=_handle_plot_events,
-                                                daemon=True)
+                    _plot_event_thread = threading.Thread(
+                        target=_handle_plot_events, daemon=True)
                     _plot_event_thread.start()
         # Return the result to to_py(), if in nested mode
         if nested:
