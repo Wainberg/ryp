@@ -29,46 +29,14 @@ class ignore_sigint:
         signal.signal(signal.SIGINT, signal.default_int_handler)
 
 
-def _get_R_home() -> str:
-    """
-    Get R's home directory, first by checking the environment variable R_HOME,
-    then (if not defined or not a valid path) by running `R RHOME`.
-    
-    Based on the rpy2.situation.get_r_home function.
-    
-    Returns:
-        The R home directory.
-    """
-    R_home = os.environ.get('R_HOME')
-    if R_home is not None and not os.path.exists(R_home):
-        warning_message = (
-            f'the environment variable R_HOME is set but points to a path '
-            f'that does not exist: "{R_home}"')
-        warnings.warn(warning_message, RuntimeWarning)
-        R_home = None
-    if R_home is None:
-        try:
-            R_home = subprocess.run('R RHOME', shell=True, capture_output=True,
-                                    text=True).stdout.rstrip()
-        except subprocess.CalledProcessError as e:
-            error_message = (
-                "the command 'R RHOME' did not run successfully, so the R "
-                "home directory could not be determined.\nSet the R_HOME "
-                "environment variable or add the directory containing the R "
-                "executable to your PATH.")
-            raise RuntimeError(error_message) from e
-    return R_home
-
-
 def _get_rlib_path(R_home: str) -> str:
     """
     Get the path to the R shared library.
     
-    Based on the rpy2.situation.get_rlib_path function.
+    Based on the rpy2.situation.get_rlib_path() function.
     
     Args:
-        R_home: the path to the R home directory, as determined by
-                _get_R_home()
+        R_home: the path to the R home directory
     
     Returns:
         The path to the R shared library.
@@ -83,11 +51,74 @@ def _get_rlib_path(R_home: str) -> str:
         return os.path.join(R_home, 'lib', 'libR.so')
 
 
+def _get_R_home_and_rlib_path() -> tuple[str, str]:
+    """
+    Get R's home directory, first by checking the environment variable R_HOME,
+    then (if not defined or misconfigured) by running `R RHOME`. Also get the
+    path to the R shared library.
+    
+    Based on the rpy2.situation.get_rlib_path() and rpy2.situation.get_r_home()
+    functions.
+    
+    Returns:
+        The R home directory and the path to the R shared library.
+    """
+    # If the environment variable R_HOME is defined, check that it exists and
+    # that it is properly configured: it must exist, and the R shared library
+    # must be found at the expected location under it (see _get_rlib_path()).
+    R_home = os.environ.get('R_HOME')
+    if R_home is not None:
+        if os.path.isdir(R_home):
+            rlib_path = _get_rlib_path(R_home)
+            if os.path.exists(rlib_path):
+                return R_home, rlib_path
+            warning_message = (
+                f'the environment variable R_HOME is set to {R_home}, which '
+                f'is a valid directory, but the R shared library was not '
+                f'found at the expected location {rlib_path} inside this '
+                f'directory. The environment variable may be misconfigured.')
+            warnings.warn(warning_message, RuntimeWarning)
+        elif os.path.isfile(R_home):
+            warning_message = (
+                f'the environment variable R_HOME is set to a file, not a '
+                f'directory: {R_home}. You may want to unset this environment '
+                f'variable since it seems to be misconfigured.')
+            warnings.warn(warning_message, RuntimeWarning)
+        else:
+            warning_message = (
+                f'the environment variable R_HOME is set to a path that does '
+                f'not exist: {R_home}. You may want to unset this environment '
+                f'variable since it seems to be misconfigured.')
+            warnings.warn(warning_message, RuntimeWarning)
+    
+    # If R_HOME is not defined or misconfigured, fall back to running `R RHOME`
+    try:
+        R_home = subprocess.run('R RHOME', shell=True, capture_output=True,
+                                text=True).stdout.rstrip()
+    except subprocess.CalledProcessError as e:
+        error_message = (
+            "the command 'R RHOME' did not run successfully, so the R "
+            "home directory could not be determined.\nSet the R_HOME "
+            "environment variable or add the directory containing the R "
+            "executable to your PATH.")
+        raise RuntimeError(error_message) from e
+    rlib_path = _get_rlib_path(R_home)
+    if os.path.isfile(rlib_path):
+        return R_home, rlib_path
+    else:
+        error_message = (
+            f"internal ryp error: the command 'R RHOME' indicated that the R "
+            f"home directory is {R_home}, but the R shared library was not "
+            f"found at the expected location {rlib_path} inside this "
+            f"directory")
+        raise RuntimeError(error_message)
+
+
 def _initialize_R() -> tuple[cffi.FFI, _cffi_backend.Lib]:
     """
     Initialize R within Python.
     
-    Based on the rpy2.rinterface_lib.embedded._initr function.
+    Based on the rpy2.rinterface_lib.embedded._initr() function.
     
     Returns:
         A two-element tuple containing a foreign function interface (FFI) to
@@ -278,8 +309,7 @@ def _initialize_R() -> tuple[cffi.FFI, _cffi_backend.Lib]:
     '''
     ffi.cdef(R_header)
     # Get the R home directory and shared object (.so/.dll) file
-    R_home = _get_R_home()
-    rlib_path = _get_rlib_path(R_home)
+    R_home, rlib_path = _get_R_home_and_rlib_path()
     # Load the .so file
     if platform.system() == 'Windows':
         # Add the directory containing the R DLL to the PATH, to work around
@@ -1390,8 +1420,9 @@ def r(R_code: str = ...) -> None:
             if platform.system() == 'Windows':
                 global _graphapp
                 if _graphapp is None:
-                    _graphapp = _ffi.dlopen(_get_rlib_path(_get_R_home())
-                                            .replace('R.dll', 'Rgraphapp.dll'))
+                    R_home, rlib_path = _get_R_home_and_rlib_path()
+                    _graphapp = _ffi.dlopen(
+                        rlib_path.replace('R.dll', 'Rgraphapp.dll'))
                     _graphapp.GA_initapp(0, _ffi.NULL)
                 if _plot_window_open():
                     _handle_plot_events()
