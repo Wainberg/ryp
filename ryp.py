@@ -23,10 +23,12 @@ class ignore_sigint:
     incomplete imports.
     """
     def __enter__(self):
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        if _main_thread:
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
     
     def __exit__(self, *_):
-        signal.signal(signal.SIGINT, signal.default_int_handler)
+        if _main_thread:
+            signal.signal(signal.SIGINT, signal.default_int_handler)
 
 
 def _get_rlib_path(R_home: str) -> str:
@@ -114,15 +116,16 @@ def _get_R_home_and_rlib_path() -> tuple[str, str]:
         raise RuntimeError(error_message)
 
 
-def _initialize_R() -> tuple[cffi.FFI, _cffi_backend.Lib]:
+def _initialize_R() -> tuple[cffi.FFI, _cffi_backend.Lib, bool]:
     """
     Initialize R within Python.
     
     Based on the rpy2.rinterface_lib.embedded._initr() function.
     
     Returns:
-        A two-element tuple containing a foreign function interface (FFI) to
-        the R shared library, and the R shared library itself.
+        A three-element tuple containing a foreign function interface (FFI) to
+        the R shared library, the R shared library itself, and whether we are
+        running on the main thread.
     """
     # Define a foreign function interface (FFI) object
     ffi = cffi.FFI()
@@ -322,23 +325,20 @@ def _initialize_R() -> tuple[cffi.FFI, _cffi_backend.Lib]:
             "R has already been initialized; did you (or a library you're "
             "using) import rpy2 earlier?")
         raise RuntimeError(error_message)
-    # Set R_HOME (required for Rf_initialize_R to not crash)
+    # Set R_HOME (required for Rf_initialize_R() to not crash)
     os.environ['R_HOME'] = R_home
-    # Disallow parallel execution
-    if threading.current_thread() is not threading.main_thread():
-        error_message = (
-            "the R interpreter is not thread-safe, so ryp can't be used by "
-            "multiple Python threads simultaneously; see the README for "
-            "alternative parallelization strategies")
-        raise RuntimeError(error_message)
     # Before initializing R, disable KeyboardInterrupts until the end of module
-    # import. Otherwise, the import will fail, and Python will re-import ryp
-    # from the beginning, re-running _initialize_R() and triggering the error
-    # about R already having been initialized.
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    # import. Otherwise, the import will fail if KeyboardInterrupted, and
+    # Python will re-import ryp from the beginning, re-running _initialize_R()
+    # and triggering the error about R already having been initialized. If we
+    # are not on the main thread, KeyboardInterrupts cannot be disabled due to
+    # the limitations of Python's signal module, so skip this step.
+    main_thread = threading.current_thread() is threading.main_thread()
+    if main_thread:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
     # Also disable R's internal signal handlers; without this line, if the user
     # triggers a KeyboardInterrupt before the module is fully imported, their
-    # first r() command will fail at R_tryEvalSilent with no error message
+    # first r() command will fail at R_tryEvalSilent() with no error message
     rlib.R_SignalHandlers = 0
     # Initialize R
     args = [ffi.new('char[]', arg)
@@ -346,7 +346,7 @@ def _initialize_R() -> tuple[cffi.FFI, _cffi_backend.Lib]:
     rlib.Rf_initialize_R(len(args), args)
     rlib.R_CStackLimit = ffi.cast('uintptr_t', -1)
     rlib.setup_Rmainloop()
-    return ffi, rlib
+    return ffi, rlib, main_thread
 
 
 class _RMemory:
@@ -1245,35 +1245,50 @@ def r(R_code: str = ...) -> None:
                 that is supposed to be a string but is unexpectedly None.
     """
     if R_code is ...:
+        # Only allow on the main thread
+        if not _main_thread:
+            error_message = (
+                'opening an R terminal with r() is only allowed on the main '
+                'thread')
+            raise RuntimeError(error_message)
         _rlib.R_ReplDLLinit()
-        # Override q() and quit() so the user doesn't accidentally close Python
-        # when trying to exit the R terminal
+        # Override q() and quit() so the user doesn't accidentally close
+        # Python when trying to exit the R terminal
         r(f'q = quit = function(...) {{'
           f'cat("Press {_EOF_instructions} to return to Python\n")}}')
         try:
-            # Run R_ReplDLLdo1() in a loop until the user presses EOF (Ctrl + D
-            # on non-Windows systems, Ctrl + Z followed by Enter on Windows).
-            # Ignore KeyboardInterrupts in Python during this loop.
+            # Run R_ReplDLLdo1() in a loop until the user presses EOF
+            # (Ctrl + D on non-Windows systems, Ctrl + Z followed by Enter
+            # on Windows). Ignore KeyboardInterrupts in Python during this
+            # loop.
             signal.signal(signal.SIGINT, signal.SIG_IGN)
             while _rlib.R_ReplDLLdo1() != -1:
                 pass
             print()
             signal.signal(signal.SIGINT, signal.default_int_handler)
         finally:
-            r(f'q = quit = function(...) {{ cat("Press {_EOF_instructions} to '
-              f'exit the Python terminal, or run exit()\n") }}')  # reset
+            r(f'q = quit = function(...) {{ cat("Press '
+              f'{_EOF_instructions} to exit the Python terminal, or run '
+              f'exit()\n") }}')  # reset
         return
-    elif isinstance(R_code, tuple) and len(R_code) == 2 and \
-            isinstance(R_code[0], str) and isinstance(R_code[1], _RMemory):
-        R_code, rmemory = R_code
-        nested = True
     elif isinstance(R_code, str):
+        # Thread-safety check
+        if threading.current_thread() is not _ryp_thread:
+            error_message = (
+                "the R interpreter is not thread-safe, so ryp can't be used "
+                "by multiple Python threads simultaneously; see the README "
+                "for alternative parallelization strategies")
+            raise RuntimeError(error_message)
         rmemory = _RMemory(_rlib)
         nested = False
         # Disallow empty code
         if not R_code:
             error_message = 'R_code is an empty string'
             raise ValueError(error_message)
+    elif isinstance(R_code, tuple) and len(R_code) == 2 and \
+            isinstance(R_code[0], str) and isinstance(R_code[1], _RMemory):
+        R_code, rmemory = R_code
+        nested = True
     else:
         error_message = \
             f'R_code has type {type(R_code).__name__!r}, but must be a string'
@@ -1499,6 +1514,13 @@ def to_r(python_object: Any, R_variable_name: str, *,
     # it to the R global namespace. (Among other advantages, this simplifies
     # stack traces relative to calling a second function when recursing.)
     if isinstance(R_variable_name, str):
+        # Thread-safety check
+        if threading.current_thread() is not _ryp_thread:
+            error_message = (
+                "the R interpreter is not thread-safe, so ryp can't be used "
+                "by multiple Python threads simultaneously; see the README "
+                "for alternative parallelization strategies")
+            raise RuntimeError(error_message)
         # Check that R_variable_name is valid
         _check_R_variable_name(R_variable_name)
         # Check that format is valid
@@ -1630,6 +1652,7 @@ def to_r(python_object: Any, R_variable_name: str, *,
         is_pyarrow_array = False
     from pyarrow.cffi import ffi as pyarrow_ffi
     if top_level:
+        # Require arrow
         if not _require(b'arrow', rmemory):
             error_message = 'please install the arrow R package to use ryp'
             raise ImportError(error_message)
@@ -2893,6 +2916,14 @@ def to_py(R_statement: str, *,
             import pyarrow as pa
         from pyarrow.cffi import ffi as pyarrow_ffi
         if isinstance(R_statement, str):
+            # Thread-safety check
+            if threading.current_thread() is not _ryp_thread:
+                error_message = (
+                    "the R interpreter is not thread-safe, so ryp can't be "
+                    "used by multiple Python threads simultaneously; see the "
+                    "README for alternative parallelization strategies")
+                raise RuntimeError(error_message)
+            # Require arrow
             if not _require(b'arrow', rmemory):
                 error_message = \
                     'please install the arrow R package to use ryp'
@@ -3795,11 +3826,20 @@ _plot_event_thread = None
 _graphapp = None
 
 # Initialize R (but only if not already initialized, so that reload(ryp) does
-# not give an error about R already having been intialized)
+# not give an error about R already having been intialized). To ensure
+# thread-safety, keep track of which thread initialized ryp and disallow
+# execution by any other thread (within the same process).
 
 _R_was_not_initialized = '_rlib' not in locals()
 if _R_was_not_initialized:
-    _ffi, _rlib = _initialize_R()
+    _ffi, _rlib, _main_thread = _initialize_R()
+    _ryp_thread = threading.current_thread()
+elif threading.current_thread() is not _ryp_thread:
+    error_message = (
+        "the R interpreter is not thread-safe, so ryp can't be used by "
+        "multiple Python threads simultaneously; see the README for "
+        "alternative parallelization strategies")
+    raise RuntimeError(error_message)
 
 # If inside a Jupyter notebook, set up inline plotting
 
@@ -3855,5 +3895,5 @@ r(f'q = quit = function(...) {{ cat("Press {_EOF_instructions} to exit '
 # had not installed a custom signal handler in _initialize_R(), since Ctrl + C
 # would not work after setup_Rmainloop() otherwise.)
 
-if _R_was_not_initialized:
+if _R_was_not_initialized and _main_thread:
     signal.signal(signal.SIGINT, signal.default_int_handler)

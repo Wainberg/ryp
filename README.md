@@ -607,12 +607,14 @@ arrays['floats']
 ## Limitations
 
 - The R interpreter is not thread-safe, so ryp can't be used by multiple Python
-  threads simultaneously. (This limitation is shared by rpy2.) If you need
+  threads simultaneously. (This limitation is shared by rpy2.) Within a given
+  Python process, only the first thread to import ryp is allowed to use it;
+  trying to use it from other threads will raise an error. If you need
   parallelism, you will need to use one of the following:
-  1. Multiprocessing in Python (e.g. via the `multiprocessing` library). Behind
-     the scenes, each Python process will use ryp to create its own dedicated R
-     interpreter, which does not interact with any other process's R
-     interpreter.
+  1. Multiprocessing in Python (e.g. via the `multiprocessing` or `pyspark`
+     libraries). Behind the scenes, each Python process will use ryp to create
+     its own dedicated R interpreter, which does not interact with any other
+     process's R interpreter.
   2. Multiprocessing in R (e.g. via the `parallel` or `future` packages). This
      is often much easier than multiprocessing in Python (e.g. just replace for
      loops/`lapply()` with `mclapply()`), and will have similar performance.
@@ -621,3 +623,7 @@ arrays['floats']
      code. If your R package supports it, this is the fastest and easiest
      option, since it merely requires an environment variable or R one-liner to
      set the number of threads.
+- On Windows, interactive plotting is blocking: once you open a plot window,
+  R will not execute any other code until you close the window. Unfortunately,
+  R's C API does not expose the necessary functionality for third-party
+  libraries like ryp to make this seamless on Windows.
