@@ -78,7 +78,7 @@ pip install git+https://github.com/Wainberg/ryp
 ```
 
 ryp's only mandatory dependencies are:
-- Python 3.7+
+- Python 3.8+
 - R
 - the [cffi](https://cffi.readthedocs.io/en/stable) Python package
 - the [pyarrow](https://arrow.apache.org/docs/python) Python package, which 
