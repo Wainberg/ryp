@@ -96,13 +96,13 @@ def _get_R_home_and_rlib_path() -> tuple[str, str]:
     # If R_HOME is not defined or misconfigured, fall back to running `R RHOME`
     try:
         R_home = subprocess.run('R RHOME', shell=True, capture_output=True,
-                                text=True).stdout.rstrip()
+                                check=True, text=True).stdout.rstrip()
     except subprocess.CalledProcessError as e:
         error_message = (
             "the command 'R RHOME' did not run successfully, so the R "
-            "home directory could not be determined.\nSet the R_HOME "
-            "environment variable or add the directory containing the R "
-            "executable to your PATH.")
+            "home directory could not be determined. Is R installed?\nIf so, "
+            "set the R_HOME environment variable or add the directory "
+            "containing the R executable to your PATH.")
         raise RuntimeError(error_message) from e
     rlib_path = _get_rlib_path(R_home)
     if os.path.isfile(rlib_path):
