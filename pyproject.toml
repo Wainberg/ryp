@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "ryp"
 version = "0.1.0"
 dependencies = ["cffi", "pyarrow"]
-requires-python = ">=3.7"
+requires-python = ">=3.8"
 authors = [{name = "Michael Wainberg", email = "m.wainberg@utoronto.ca"}]
 description = "R inside Python"
 readme = "README.md"
