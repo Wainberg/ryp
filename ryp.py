@@ -14,7 +14,7 @@ import warnings
 from typing import Any, Literal
 
 
-__version__ = '0.1.0'
+__version__ = '0.2.0'
 
 
 class ignore_sigint:
@@ -826,7 +826,18 @@ def _convert_object_to_arrow(python_object: Any,
                     allowed_types=(datetime.timedelta, pd.Timedelta)
                                   if has_pandas else (datetime.timedelta,),
                     disallowed_types=(), allowed_dtypes={np.timedelta64})
-                python_object = python_object.astype('timedelta64[ns]')
+                try:
+                    python_object = python_object.astype('timedelta64[ns]')
+                except TypeError:
+                    # e.g. "Cannot cast NumPy timedelta64 scalar from metadata
+                    # [Y] to [ns] according to the rule 'same_kind'"; occurs
+                    # when mixing timedelta64 with time unit of months or years
+                    # with missing values/NaNs
+                    python_object = np.array([
+                        np.timedelta64('NaT') if element is None else
+                        element.astype('timedelta64[ns]')
+                        if isinstance(element, np.timedelta64) else element
+                        for element in python_object])
                 continue
             elif error_string.startswith('Expected') or error_string == \
                     'Unsupported numpy type datetime64':
@@ -884,6 +895,14 @@ def _convert_object_to_arrow(python_object: Any,
                     "int() argument must be a string, a bytes-like object or "
                     "a real number, not 'datetime.datetime'"):
                 # Mix of datetime.time and np.datetime64
+                error_message = (
+                    f'{python_object_description} and elements with a mix of '
+                    f'types, and cannot be represented as any single R vector '
+                    f'type')
+                raise TypeError(error_message) from e
+            elif error_string == (
+                    "int() argument must be a string, a bytes-like object or "
+                    "a real number, not 'datetime.timedelta'"):
                 error_message = (
                     f'{python_object_description} and elements with a mix of '
                     f'types, and cannot be represented as any single R vector '
