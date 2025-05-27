@@ -10,12 +10,11 @@ requires-python = ">=3.8"
 authors = [{name = "Michael Wainberg", email = "m.wainberg@utoronto.ca"}]
 description = "R inside Python"
 readme = "README.md"
-license = {text = "MIT License"}
+license = "MIT"
 keywords = ["R", "rpy2", "reticulate", "tidyverse", "ggplot", "ggplot2", "arrow"]
 classifiers = [
   "Intended Audience :: Developers",
   "Intended Audience :: Science/Research",
-  "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.7",
