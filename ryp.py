@@ -311,13 +311,19 @@ def _initialize_R() -> tuple[cffi.FFI, _cffi_backend.Lib, bool]:
     int select(int, fd_set *, fd_set *, fd_set *, struct timeval *);
     '''
     ffi.cdef(R_header)
-    # Get the R home directory and shared object (.so/.dll) file
+    # Get the R home directory and location of the R shared library (.so/.dll)
     R_home, rlib_path = _get_R_home_and_rlib_path()
-    # Load the .so file
-    if platform.system() == 'Windows':
-        # Add the directory containing the R DLL to the PATH, to work around
-        # github.com/python-cffi/cffi/issues/64
-        os.environ['PATH'] += f';{os.path.dirname(rlib_path)}'
+    # Load the R shared library. Add its directory to the system's library
+    # search path environment variable so its dependencies (e.g. libRblas.so)
+    # are found during loading, otherwise it will not load correctly. This
+    # is also necessary to work around github.com/python-cffi/cffi/issues/64 on
+    # Windows.
+    path_var = 'PATH' if platform.system() == 'Windows' else \
+        'DYLD_LIBRARY_PATH' if platform.system() == 'Darwin' else \
+        'LD_LIBRARY_PATH'
+    os.environ[path_var] = \
+        f'{os.path.dirname(rlib_path)}{os.pathsep}{os.environ[path_var]}' \
+        if path_var in os.environ else os.path.dirname(rlib_path)
     rlib = ffi.dlopen(rlib_path)
     # Error out if R has already been initialized (e.g. by rpy2)
     if rlib.R_NilValue != ffi.NULL:
