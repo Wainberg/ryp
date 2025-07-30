@@ -123,22 +123,22 @@ def _initialize_ryp() -> None:
     Based on the rpy2.rinterface_lib.embedded._initr() function.
     """
     global _ffi, _rlib, _ryp_thread, _ryp_PID, _main_thread, _jupyter_notebook
+    # Disallow running ryp from a forked process if it has already been
+    # initialized in the parent process
+    current_PID = os.getpid()
+    if _ryp_PID is not None and _ryp_PID != current_PID:
+        error_message = (
+            "r(), to_py() and to_r() cannot be called in a forked "
+            "process if any of them were called in the parent "
+            "process prior to forking; as discussed in the README, "
+            "either switch to the 'forkserver' or 'spawn' "
+            "multiprocessing backends, or avoid using ryp outside "
+            "the parallel part of your code")
+        raise RuntimeError(error_message)
     # Use double-checked locking when deciding whether to initialize
     if _rlib is None:
         with _init_lock:
             if _rlib is None:
-                # Disallow running ryp from a forked process if it has already
-                # been initialized in the parent process
-                current_PID = os.getpid()
-                if _ryp_PID is not None and _ryp_PID != current_PID:
-                    error_message = (
-                        "r(), to_py() and to_r() cannot be called in a forked "
-                        "process if any of them were called in the parent "
-                        "process prior to forking; as discussed in the README, "
-                        "either switch to the 'forkserver' or 'spawn' "
-                        "multiprocessing backends, or avoid using ryp outside "
-                        "the parallel part of your code")
-                    raise RuntimeError(error_message)
                 # Set _ryp_PID and _ryp_thread to the initializing process's
                 # process ID and the initializing thread's thread ID
                 _ryp_PID = current_PID
