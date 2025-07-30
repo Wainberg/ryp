@@ -116,237 +116,326 @@ def _get_R_home_and_rlib_path() -> tuple[str, str]:
         raise RuntimeError(error_message)
 
 
-def _initialize_R() -> tuple[cffi.FFI, _cffi_backend.Lib, bool]:
+def _initialize_ryp() -> None:
     """
-    Initialize R within Python.
+    Initialize ryp, if not already initialized.
     
     Based on the rpy2.rinterface_lib.embedded._initr() function.
-    
-    Returns:
-        A three-element tuple containing a foreign function interface (FFI) to
-        the R shared library, the R shared library itself, and whether we are
-        running on the main thread.
     """
-    # Define a foreign function interface (FFI) object
-    ffi = cffi.FFI()
-    # Add functions from R's C API to the FFI
-    FD_SETSIZE = 1024
-    NFDBITS = 8 * ffi.sizeof('unsigned long')
-    R_header = '''
-    typedef unsigned int SEXPTYPE;
-    typedef struct SEXPREC *SEXP;
-    typedef struct SEXPREC {
-        struct sxpinfo_struct sxpinfo;
-        struct SEXPREC *attrib;
-        struct SEXPREC *gengc_next_node, *gengc_prev_node;
-        union {
-            struct primsxp_struct primsxp;
-            struct symsxp_struct symsxp;
-            struct listsxp_struct listsxp;
-            struct envsxp_struct envsxp;
-            struct closxp_struct closxp;
-            struct promsxp_struct promsxp;
-        } u;
-    } SEXPREC;
-    struct sxpinfo_struct {
-        SEXPTYPE type : 5;
-        unsigned int scalar: 1;
-        unsigned int alt : 1;
-        unsigned int obj : 1;
-        unsigned int gp : 16;
-        unsigned int mark : 1;
-        unsigned int debug : 1;
-        unsigned int trace : 1;
-        unsigned int spare : 1;
-        unsigned int gcgen : 1;
-        unsigned int gccls : 3;
-        unsigned int named : 16;
-        unsigned int extra : 32;
-    };
-    struct primsxp_struct { int offset; };
-    struct symsxp_struct { struct SEXPREC *pname; struct SEXPREC *value;
-                           struct SEXPREC *internal; };
-    struct listsxp_struct { struct SEXPREC *carval; struct SEXPREC *cdrval;
-                            struct SEXPREC *tagval; };
-    struct envsxp_struct { struct SEXPREC *frame; struct SEXPREC *enclos;
-                           struct SEXPREC *hashtab; };
-    struct closxp_struct { struct SEXPREC *formals; struct SEXPREC *body;
-                           struct SEXPREC *env; };
-    struct promsxp_struct { struct SEXPREC *value; struct SEXPREC *expr;
-                            struct SEXPREC *env; };
-    
-    typedef enum { FALSE = 0, TRUE } Rboolean;
-    typedef unsigned char Rbyte;
-    typedef struct { double r; double i; } Rcomplex;
-    typedef ''' + ("ptrdiff_t" if ffi.sizeof('size_t') > 4 else
-                   "int") + ''' R_xlen_t;
-    
-    typedef void (*InputHandlerProc)(void *userData);
-    typedef struct _InputHandler {
-      int activity;
-      int fileDescriptor;
-      InputHandlerProc handler;
-      struct _InputHandler *next;
-      int active;
-      void *userData;
-    } InputHandler;
-    
-    typedef struct {
-        unsigned long fds_bits[''' + str(FD_SETSIZE // NFDBITS) + '''];
-    } fd_set;
-    struct timeval {
-        long tv_sec;
-        long tv_usec;
-    };
-    
-    const SEXPTYPE NILSXP = 0;
-    const SEXPTYPE SYMSXP = 1;
-    const SEXPTYPE LISTSXP = 2;
-    const SEXPTYPE CLOSXP = 3;
-    const SEXPTYPE ENVSXP = 4;
-    const SEXPTYPE PROMSXP = 5;
-    const SEXPTYPE LANGSXP = 6;
-    const SEXPTYPE SPECIALSXP = 7;
-    const SEXPTYPE BUILTINSXP = 8;
-    const SEXPTYPE CHARSXP = 9;
-    const SEXPTYPE LGLSXP = 10;
-    const SEXPTYPE INTSXP = 13;
-    const SEXPTYPE REALSXP = 14;
-    const SEXPTYPE CPLXSXP = 15;
-    const SEXPTYPE STRSXP = 16;
-    const SEXPTYPE DOTSXP = 17;
-    const SEXPTYPE ANYSXP = 18;
-    const SEXPTYPE VECSXP = 19;
-    const SEXPTYPE EXPRSXP = 20;
-    const SEXPTYPE BCODESXP = 21;
-    const SEXPTYPE EXTPTRSXP = 22;
-    const SEXPTYPE WEAKREFSXP = 23;
-    const SEXPTYPE RAWSXP = 24;
-    const SEXPTYPE S4SXP = 25;
-    const SEXPTYPE NEWSXP = 30;
-    const SEXPTYPE FREESXP = 31;
-    const SEXPTYPE FUNSXP = 99;
-    
-    const int CE_UTF8 = 1;
-    const int PARSE_OK = 1;
-    
-    extern SEXP R_BaseEnv;
-    extern uintptr_t R_CStackLimit;
-    extern SEXP R_ClassSymbol;
-    extern SEXP R_DimNamesSymbol;
-    extern SEXP R_DimSymbol;
-    extern SEXP R_DoubleColonSymbol;
-    extern SEXP R_GlobalEnv;
-    extern InputHandler *R_InputHandlers;
-    extern SEXP R_LevelsSymbol;
-    extern SEXP R_NamesSymbol;
-    extern int R_NaInt;
-    extern SEXP R_NilValue;
-    extern char R_ParseContext[256];
-    extern int R_ParseContextLast;
-    extern char R_ParseErrorMsg[256];
-    extern SEXP R_RowNamesSymbol;
-    
-    SEXP CAR(SEXP);
-    SEXP CDR(SEXP);
-    SEXP CDDR(SEXP);
-    Rcomplex *COMPLEX(SEXP);
-    Rcomplex COMPLEX_ELT(SEXP, R_xlen_t);
-    int *INTEGER(SEXP);
-    int INTEGER_ELT(SEXP, R_xlen_t);
-    Rboolean LOGICAL_ELT(SEXP, R_xlen_t);
-    Rbyte *RAW(SEXP);
-    double *REAL(SEXP);
-    const char* R_CHAR(SEXP);
-    SEXP R_FindNamespace(SEXP);
-    SEXP R_ParseVector(SEXP, int, int *, SEXP);
-    int R_ReplDLLdo1(void);
-    void R_ReplDLLinit(void);
-    extern int R_SignalHandlers;
-    const char *R_curErrorBuf(void);
-    SEXP R_do_new_object(SEXP);
-    SEXP R_do_slot(SEXP, SEXP);
-    SEXP R_do_slot_assign(SEXP, SEXP, SEXP);
-    SEXP R_getClassDef(const char *);
-    SEXP R_lsInternal(SEXP, Rboolean);
-    void R_runHandlers(InputHandler *, fd_set *);
-    SEXP R_tryCatchError(SEXP (*)(void *), void *,
-                         SEXP (*)(SEXP, void *), void *);
-    SEXP R_tryEvalSilent(SEXP, SEXP, int *);
-    SEXP Rf_ScalarInteger(int);
-    SEXP Rf_ScalarLogical(int);
-    SEXP Rf_ScalarReal(double);
-    SEXP Rf_allocVector(SEXPTYPE, R_xlen_t);
-    void Rf_defineVar(SEXP, SEXP, SEXP);
-    SEXP Rf_eval(SEXP, SEXP);
-    SEXP Rf_findFun(SEXP, SEXP);
-    SEXP Rf_findVar(SEXP, SEXP);
-    SEXP Rf_findVarInFrame(SEXP, SEXP);
-    SEXP Rf_getAttrib(SEXP, SEXP);
-    Rboolean Rf_inherits(SEXP, const char *);
-    int Rf_initialize_R(int, char **);
-    SEXP Rf_install(const char *);
-    SEXP Rf_lang1(SEXP);
-    SEXP Rf_lang2(SEXP, SEXP);
-    SEXP Rf_lang3(SEXP, SEXP, SEXP);
-    SEXP Rf_lang4(SEXP, SEXP, SEXP, SEXP);
-    SEXP Rf_lcons(SEXP, SEXP);
-    SEXP Rf_mkCharLenCE(const char *, int, int);
-    SEXP Rf_protect(SEXP);
-    SEXP Rf_setAttrib(SEXP, SEXP, SEXP);
-    void Rf_unprotect(int);
-    R_xlen_t Rf_xlength(SEXP);
-    void SET_LOGICAL_ELT(SEXP, R_xlen_t, int);
-    void SET_STRING_ELT(SEXP, R_xlen_t, SEXP);
-    void SET_TAG(SEXP, SEXP);
-    SEXP SET_VECTOR_ELT(SEXP, R_xlen_t, SEXP);
-    SEXP STRING_ELT(SEXP, R_xlen_t);
-    int TYPEOF(SEXP);
-    SEXP VECTOR_ELT(SEXP, R_xlen_t);
-    void setup_Rmainloop(void);
-    
-    int	GA_doevent(void);
-    int	GA_initapp(int argc, char *argv[]);
-    
-    int select(int, fd_set *, fd_set *, fd_set *, struct timeval *);
-    '''
-    ffi.cdef(R_header)
-    # Get the R home directory and shared object (.so/.dll) file
-    R_home, rlib_path = _get_R_home_and_rlib_path()
-    # Load the .so file
-    if platform.system() == 'Windows':
-        # Add the directory containing the R DLL to the PATH, to work around
-        # github.com/python-cffi/cffi/issues/64
-        os.environ['PATH'] += f';{os.path.dirname(rlib_path)}'
-    rlib = ffi.dlopen(rlib_path)
-    # Error out if R has already been initialized (e.g. by rpy2)
-    if rlib.R_NilValue != ffi.NULL:
+    global _ffi, _rlib, _ryp_thread, _ryp_PID, _main_thread, _jupyter_notebook
+    # Use double-checked locking when deciding whether to initialize
+    if _rlib is None:
+        with _init_lock:
+            if _rlib is None:
+                # Disallow running ryp from a forked process if it has already
+                # been initialized in the parent process
+                current_PID = os.getpid()
+                if _ryp_PID is not None and _ryp_PID != current_PID:
+                    error_message = (
+                        "r(), to_py() and to_r() cannot be called in a forked "
+                        "process if any of them were called in the parent "
+                        "process prior to forking; as discussed in the README, "
+                        "either switch to the 'forkserver' or 'spawn' "
+                        "multiprocessing backends, or avoid using ryp outside "
+                        "the parallel part of your code")
+                    raise RuntimeError(error_message)
+                # Set _ryp_PID and _ryp_thread to the initializing process's
+                # process ID and the initializing thread's thread ID
+                _ryp_PID = current_PID
+                _ryp_thread = threading.current_thread()
+                # Define a foreign function interface (FFI) object
+                _ffi = cffi.FFI()
+                # Add functions from R's C API to the FFI
+                FD_SETSIZE = 1024
+                NFDBITS = 8 * _ffi.sizeof('unsigned long')
+                R_header = '''
+                typedef unsigned int SEXPTYPE;
+                typedef struct SEXPREC *SEXP;
+                typedef struct SEXPREC {
+                    struct sxpinfo_struct sxpinfo;
+                    struct SEXPREC *attrib;
+                    struct SEXPREC *gengc_next_node, *gengc_prev_node;
+                    union {
+                        struct primsxp_struct primsxp;
+                        struct symsxp_struct symsxp;
+                        struct listsxp_struct listsxp;
+                        struct envsxp_struct envsxp;
+                        struct closxp_struct closxp;
+                        struct promsxp_struct promsxp;
+                    } u;
+                } SEXPREC;
+                struct sxpinfo_struct {
+                    SEXPTYPE type : 5;
+                    unsigned int scalar: 1;
+                    unsigned int alt : 1;
+                    unsigned int obj : 1;
+                    unsigned int gp : 16;
+                    unsigned int mark : 1;
+                    unsigned int debug : 1;
+                    unsigned int trace : 1;
+                    unsigned int spare : 1;
+                    unsigned int gcgen : 1;
+                    unsigned int gccls : 3;
+                    unsigned int named : 16;
+                    unsigned int extra : 32;
+                };
+                struct primsxp_struct { int offset; };
+                struct symsxp_struct { struct SEXPREC *pname;
+                                       struct SEXPREC *value;
+                                       struct SEXPREC *internal; };
+                struct listsxp_struct { struct SEXPREC *carval;
+                                        struct SEXPREC *cdrval;
+                                        struct SEXPREC *tagval; };
+                struct envsxp_struct { struct SEXPREC *frame;
+                                       struct SEXPREC *enclos;
+                                       struct SEXPREC *hashtab; };
+                struct closxp_struct { struct SEXPREC *formals;
+                                       struct SEXPREC *body;
+                                       struct SEXPREC *env; };
+                struct promsxp_struct { struct SEXPREC *value;
+                                        struct SEXPREC *expr;
+                                        struct SEXPREC *env; };
+
+                typedef enum { FALSE = 0, TRUE } Rboolean;
+                typedef unsigned char Rbyte;
+                typedef struct { double r; double i; } Rcomplex;
+                typedef ''' + ("ptrdiff_t" if _ffi.sizeof('size_t') > 4 else
+                               "int") + ''' R_xlen_t;
+
+                typedef void (*InputHandlerProc)(void *userData);
+                typedef struct _InputHandler {
+                  int activity;
+                  int fileDescriptor;
+                  InputHandlerProc handler;
+                  struct _InputHandler *next;
+                  int active;
+                  void *userData;
+                } InputHandler;
+
+                typedef struct {
+                    unsigned long fds_bits[''' + \
+                    str(FD_SETSIZE // NFDBITS) + '''];
+                } fd_set;
+                struct timeval {
+                    long tv_sec;
+                    long tv_usec;
+                };
+
+                const SEXPTYPE NILSXP = 0;
+                const SEXPTYPE SYMSXP = 1;
+                const SEXPTYPE LISTSXP = 2;
+                const SEXPTYPE CLOSXP = 3;
+                const SEXPTYPE ENVSXP = 4;
+                const SEXPTYPE PROMSXP = 5;
+                const SEXPTYPE LANGSXP = 6;
+                const SEXPTYPE SPECIALSXP = 7;
+                const SEXPTYPE BUILTINSXP = 8;
+                const SEXPTYPE CHARSXP = 9;
+                const SEXPTYPE LGLSXP = 10;
+                const SEXPTYPE INTSXP = 13;
+                const SEXPTYPE REALSXP = 14;
+                const SEXPTYPE CPLXSXP = 15;
+                const SEXPTYPE STRSXP = 16;
+                const SEXPTYPE DOTSXP = 17;
+                const SEXPTYPE ANYSXP = 18;
+                const SEXPTYPE VECSXP = 19;
+                const SEXPTYPE EXPRSXP = 20;
+                const SEXPTYPE BCODESXP = 21;
+                const SEXPTYPE EXTPTRSXP = 22;
+                const SEXPTYPE WEAKREFSXP = 23;
+                const SEXPTYPE RAWSXP = 24;
+                const SEXPTYPE S4SXP = 25;
+                const SEXPTYPE NEWSXP = 30;
+                const SEXPTYPE FREESXP = 31;
+                const SEXPTYPE FUNSXP = 99;
+
+                const int CE_UTF8 = 1;
+                const int PARSE_OK = 1;
+
+                extern SEXP R_BaseEnv;
+                extern uintptr_t R_CStackLimit;
+                extern SEXP R_ClassSymbol;
+                extern SEXP R_DimNamesSymbol;
+                extern SEXP R_DimSymbol;
+                extern SEXP R_DoubleColonSymbol;
+                extern SEXP R_GlobalEnv;
+                extern InputHandler *R_InputHandlers;
+                extern SEXP R_LevelsSymbol;
+                extern SEXP R_NamesSymbol;
+                extern int R_NaInt;
+                extern SEXP R_NilValue;
+                extern char R_ParseContext[256];
+                extern int R_ParseContextLast;
+                extern char R_ParseErrorMsg[256];
+                extern SEXP R_RowNamesSymbol;
+
+                SEXP CAR(SEXP);
+                SEXP CDR(SEXP);
+                SEXP CDDR(SEXP);
+                Rcomplex *COMPLEX(SEXP);
+                Rcomplex COMPLEX_ELT(SEXP, R_xlen_t);
+                int *INTEGER(SEXP);
+                int INTEGER_ELT(SEXP, R_xlen_t);
+                Rboolean LOGICAL_ELT(SEXP, R_xlen_t);
+                Rbyte *RAW(SEXP);
+                double *REAL(SEXP);
+                const char* R_CHAR(SEXP);
+                SEXP R_FindNamespace(SEXP);
+                SEXP R_ParseVector(SEXP, int, int *, SEXP);
+                int R_ReplDLLdo1(void);
+                void R_ReplDLLinit(void);
+                extern int R_SignalHandlers;
+                const char *R_curErrorBuf(void);
+                SEXP R_do_new_object(SEXP);
+                SEXP R_do_slot(SEXP, SEXP);
+                SEXP R_do_slot_assign(SEXP, SEXP, SEXP);
+                SEXP R_getClassDef(const char *);
+                SEXP R_lsInternal(SEXP, Rboolean);
+                void R_runHandlers(InputHandler *, fd_set *);
+                SEXP R_tryCatchError(SEXP (*)(void *), void *,
+                                     SEXP (*)(SEXP, void *), void *);
+                SEXP R_tryEvalSilent(SEXP, SEXP, int *);
+                SEXP Rf_ScalarInteger(int);
+                SEXP Rf_ScalarLogical(int);
+                SEXP Rf_ScalarReal(double);
+                SEXP Rf_allocVector(SEXPTYPE, R_xlen_t);
+                void Rf_defineVar(SEXP, SEXP, SEXP);
+                SEXP Rf_eval(SEXP, SEXP);
+                SEXP Rf_findFun(SEXP, SEXP);
+                SEXP Rf_findVar(SEXP, SEXP);
+                SEXP Rf_findVarInFrame(SEXP, SEXP);
+                SEXP Rf_getAttrib(SEXP, SEXP);
+                Rboolean Rf_inherits(SEXP, const char *);
+                int Rf_initialize_R(int, char **);
+                SEXP Rf_install(const char *);
+                SEXP Rf_lang1(SEXP);
+                SEXP Rf_lang2(SEXP, SEXP);
+                SEXP Rf_lang3(SEXP, SEXP, SEXP);
+                SEXP Rf_lang4(SEXP, SEXP, SEXP, SEXP);
+                SEXP Rf_lcons(SEXP, SEXP);
+                SEXP Rf_mkCharLenCE(const char *, int, int);
+                SEXP Rf_protect(SEXP);
+                SEXP Rf_setAttrib(SEXP, SEXP, SEXP);
+                void Rf_unprotect(int);
+                R_xlen_t Rf_xlength(SEXP);
+                void SET_LOGICAL_ELT(SEXP, R_xlen_t, int);
+                void SET_STRING_ELT(SEXP, R_xlen_t, SEXP);
+                void SET_TAG(SEXP, SEXP);
+                SEXP SET_VECTOR_ELT(SEXP, R_xlen_t, SEXP);
+                SEXP STRING_ELT(SEXP, R_xlen_t);
+                int TYPEOF(SEXP);
+                SEXP VECTOR_ELT(SEXP, R_xlen_t);
+                void setup_Rmainloop(void);
+
+                int GA_doevent(void);
+                int GA_initapp(int argc, char *argv[]);
+
+                int select(int, fd_set *, fd_set *, fd_set *,
+                           struct timeval *);
+                '''
+                _ffi.cdef(R_header)
+                # Get the R home directory and shared object (.so/.dll) file
+                R_home, rlib_path = _get_R_home_and_rlib_path()
+                # Load the .so file
+                if platform.system() == 'Windows':
+                    # Add the directory containing the R DLL to the PATH, to
+                    # work around github.com/python-cffi/cffi/issues/64
+                    os.environ['PATH'] += f';{os.path.dirname(rlib_path)}'
+                _rlib = _ffi.dlopen(rlib_path)
+                # Error out if R has already been initialized (e.g. by rpy2)
+                if _rlib.R_NilValue != _ffi.NULL:
+                    error_message = (
+                        "R has already been initialized; did you (or a "
+                        "library you're using) import rpy2 earlier?")
+                    raise RuntimeError(error_message)
+                # Set R_HOME (required for Rf_initialize_R() to not crash)
+                os.environ['R_HOME'] = R_home
+                # Before initializing R, disable KeyboardInterrupts until the
+                # end of initialization, to avoid a corrupted partial
+                # initialization. If not on the main thread, KeyboardInterrupts
+                # cannot be disabled due to the limitations of Python's signal
+                # module, so skip this step.
+                _main_thread = \
+                    threading.current_thread() is threading.main_thread()
+                if _main_thread:
+                    signal.signal(signal.SIGINT, signal.SIG_IGN)
+                # Also disable R's internal signal handlers; without this line,
+                # if the user triggers a KeyboardInterrupt before the module is
+                # fully imported, their first r() command will fail at
+                # R_tryEvalSilent() with no error message
+                _rlib.R_SignalHandlers = 0
+                # Initialize R
+                args = [_ffi.new('char[]', arg) for arg in
+                        (b'R', b'--quiet', b'--no-save', b'--args', b'ryp')]
+                _rlib.Rf_initialize_R(len(args), args)
+                _rlib.R_CStackLimit = _ffi.cast('uintptr_t', -1)
+                _rlib.setup_Rmainloop()
+                # Do ryp initialization that requires R to be initialized
+                r(f'q = quit = function(...) {{ cat("Press '
+                  f'{_EOF_instructions} to exit the Python terminal, or run '
+                  f'exit()\n") }}; options(arrow.int64_downcast = FALSE)')
+                # If inside a Jupyter notebook, set up inline plotting
+                try:
+                    ipython = get_ipython()
+                except NameError:
+                    _jupyter_notebook = False
+                else:
+                    _jupyter_notebook = 'IPKernelApp' in ipython.config
+                if _jupyter_notebook:
+                    from IPython.display import display, SVG
+                    with _RMemory(_rlib) as rmemory:
+                        if not _require(b'svglite', rmemory):
+                            error_message = (
+                                'please install the svglite R package to use '
+                                'inline plotting in Jupyter notebooks')
+                            raise ImportError(error_message)
+                    # Make a custom plotting device that saves each plot to a
+                    # temp file as SVG
+                    r(f'.tempfile = tempfile(fileext = "png"); '
+                      f'options(device=function() {{ svglite(.tempfile, '
+                      f'width={_config["plot_width"]}, '
+                      f'height={_config["plot_height"]})}})')
+                    temp_file = to_py('.tempfile')
+
+                    def _plot_jupyter_inline(*_: Any) -> None:
+                        """
+                        If the user just ran a cell that created a plot in R,
+                        display it. Executed after each cell is run in the
+                        Jupyter notebook.
+                        """
+                        # If temp_file doesn't exist, nothing's been plotted in
+                        # this cell
+                        if not os.path.exists(temp_file):
+                            return
+                        # Save the plot to temp_file in R
+                        r('dev.off()')
+                        # Load the plot from temp_file into Python, as a
+                        # bytestring
+                        with open(temp_file, 'rb') as file:
+                            data = file.read()
+                        # Display the plot in the Jupyter notebook
+                        display(SVG(data=data))
+                        # Delete temp_file
+                        os.unlink(temp_file)
+
+                    ipython.events.register('post_run_cell',
+                                            _plot_jupyter_inline)
+                # Now that we're at the very end of initialization, reset the
+                # KeyboardInterrupt signal handler to the default one. (This
+                # would still be necessary even if we had not installed a
+                # custom signal handler above, since Ctrl + C would not work
+                # after setup_Rmainloop() otherwise.)
+                if _main_thread:
+                    signal.signal(signal.SIGINT, signal.default_int_handler)
+    # To ensure thread-safety, keep track of which thread initialized ryp
+    # and disallow execution by any other thread (within the same
+    # process).
+    if threading.current_thread() is not _ryp_thread:
         error_message = (
-            "R has already been initialized; did you (or a library you're "
-            "using) import rpy2 earlier?")
+            "the R interpreter is not thread-safe, so ryp can't be used "
+            "by multiple Python threads simultaneously; see the README "
+            "for alternative parallelization strategies")
         raise RuntimeError(error_message)
-    # Set R_HOME (required for Rf_initialize_R() to not crash)
-    os.environ['R_HOME'] = R_home
-    # Before initializing R, disable KeyboardInterrupts until the end of module
-    # import. Otherwise, the import will fail if KeyboardInterrupted, and
-    # Python will re-import ryp from the beginning, re-running _initialize_R()
-    # and triggering the error about R already having been initialized. If we
-    # are not on the main thread, KeyboardInterrupts cannot be disabled due to
-    # the limitations of Python's signal module, so skip this step.
-    main_thread = threading.current_thread() is threading.main_thread()
-    if main_thread:
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
-    # Also disable R's internal signal handlers; without this line, if the user
-    # triggers a KeyboardInterrupt before the module is fully imported, their
-    # first r() command will fail at R_tryEvalSilent() with no error message
-    rlib.R_SignalHandlers = 0
-    # Initialize R
-    args = [ffi.new('char[]', arg)
-            for arg in (b'R', b'--quiet', b'--no-save', b'--args', b'ryp')]
-    rlib.Rf_initialize_R(len(args), args)
-    rlib.R_CStackLimit = ffi.cast('uintptr_t', -1)
-    rlib.setup_Rmainloop()
-    return ffi, rlib, main_thread
 
 
 class _RMemory:
@@ -1263,6 +1352,8 @@ def r(R_code: str = ...) -> None:
                 from inadvertently opening the terminal when passing a variable
                 that is supposed to be a string but is unexpectedly None.
     """
+    # Initialize ryp, if not already initialized
+    _initialize_ryp()
     if R_code is ...:
         # Only allow on the main thread
         if not _main_thread:
@@ -1291,13 +1382,6 @@ def r(R_code: str = ...) -> None:
               f'exit()\n") }}')  # reset
         return
     elif isinstance(R_code, str):
-        # Thread-safety check
-        if threading.current_thread() is not _ryp_thread:
-            error_message = (
-                "the R interpreter is not thread-safe, so ryp can't be used "
-                "by multiple Python threads simultaneously; see the README "
-                "for alternative parallelization strategies")
-            raise RuntimeError(error_message)
         rmemory = _RMemory(_rlib)
         nested = False
         # Disallow empty code
@@ -1520,6 +1604,8 @@ def to_r(python_object: Any, R_variable_name: str, *,
                   None unless python_object is a multidimensional NumPy array,
                   or a type that might contain one (list, tuple, or dict).
     """
+    # Initialize ryp, if not already initialized
+    _initialize_ryp()
     # Raise errors when format is not None and we're not recursing
     raise_format_errors = format is not None
     # When calling to_r recursively, allow R_variable_name to be a tuple of
@@ -2911,6 +2997,8 @@ def to_py(R_statement: str, *,
     Returns:
         The Python object that results from converting the R variable.
     """
+    # Initialize ryp, if not already initialized
+    _initialize_ryp()
     # Raise errors when format/squeeze is not None and we're not recursing
     raise_format_errors = format is not None
     raise_squeeze_errors = squeeze is not None
@@ -3841,78 +3929,11 @@ _R_keywords = {'if', 'else', 'repeat', 'while', 'function', 'for', 'in',
 _sparse_matrix_classes = {b'dgRMatrix', b'dgCMatrix', b'dgTMatrix',
                           b'ngRMatrix', b'ngCMatrix', b'ngTMatrix',
                           b'lgRMatrix', b'lgCMatrix', b'lgTMatrix'}
-_plot_event_thread = None
+_init_lock = threading.Lock()
+_ffi = None
+_rlib = None
+_ryp_PID = None
+_ryp_thread = None
+_jupyter_notebook = None
 _graphapp = None
-
-# Initialize R (but only if not already initialized, so that reload(ryp) does
-# not give an error about R already having been intialized). To ensure
-# thread-safety, keep track of which thread initialized ryp and disallow
-# execution by any other thread (within the same process).
-
-_R_was_not_initialized = '_rlib' not in locals()
-if _R_was_not_initialized:
-    _ffi, _rlib, _main_thread = _initialize_R()
-    _ryp_thread = threading.current_thread()
-elif threading.current_thread() is not _ryp_thread:
-    error_message = (
-        "the R interpreter is not thread-safe, so ryp can't be used by "
-        "multiple Python threads simultaneously; see the README for "
-        "alternative parallelization strategies")
-    raise RuntimeError(error_message)
-
-# If inside a Jupyter notebook, set up inline plotting
-
-try:
-    _ipython = get_ipython()
-except NameError:
-    _jupyter_notebook = False
-else:
-    _jupyter_notebook = 'IPKernelApp' in _ipython.config
-
-if _jupyter_notebook:
-    from IPython.display import display, SVG
-    with _RMemory(_rlib) as rmemory:
-        if not _require(b'svglite', rmemory):
-            error_message = (
-                'please install the svglite R package to use inline plotting '
-                'in Jupyter notebooks')
-            raise ImportError(error_message)
-    # Make a custom plotting device that saves each plot to a temp file as SVG
-    r(f'.tempfile = tempfile(fileext = "png"); '
-      f'options(device=function() {{ svglite(.tempfile, '
-      f'width={_config["plot_width"]}, height={_config["plot_height"]})}})')
-    temp_file = to_py('.tempfile')
-    
-    def _plot_jupyter_inline(*_: Any) -> None:
-        """
-        If the user just ran a cell that created a plot in R, display it.
-        Executed after each cell is run in the Jupyter notebook.
-        """
-        # If temp_file doesn't exist, nothing's been plotted in this cell
-        if not os.path.exists(temp_file):
-            return
-        # Save the plot to temp_file in R
-        r('dev.off()')
-        # Load the plot from temp_file into Python, as a bytestring
-        with open(temp_file, 'rb') as file:
-            data = file.read()
-        # Display the plot in the Jupyter notebook
-        display(SVG(data=data))
-        # Delete temp_file
-        os.unlink(temp_file)
-    
-    _ipython.events.register('post_run_cell', _plot_jupyter_inline)
-
-# Do ryp initialization that requires R to be initialized
-
-r(f'q = quit = function(...) {{ cat("Press {_EOF_instructions} to exit '
-  f'the Python terminal, or run exit()\n") }}; '
-  f'options(arrow.int64_downcast = FALSE)')
-
-# Now that we're at the very end of the module, reset the KeyboardInterrupt
-# signal handler to the default one. (This would still be necessary even if we
-# had not installed a custom signal handler in _initialize_R(), since Ctrl + C
-# would not work after setup_Rmainloop() otherwise.)
-
-if _R_was_not_initialized and _main_thread:
-    signal.signal(signal.SIGINT, signal.default_int_handler)
+_plot_event_thread = None

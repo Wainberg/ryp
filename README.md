@@ -608,9 +608,10 @@ arrays['floats']
 
 - The R interpreter is not thread-safe, so ryp can't be used by multiple Python
   threads simultaneously. (This limitation is shared by rpy2.) Within a given
-  Python process, only the first thread to import ryp is allowed to use it;
-  trying to use it from other threads will raise an error. If you need
-  parallelism, you will need to use one of the following:
+  Python process, only the first Python thread to call one of ryp's core
+  functions (`r()`, `to_py()`, or `to_r()`) is ever allowed to call them going
+  forward; trying to call them later from other Python threads will raise an
+  error. If you need parallelism, you will need to use one of the following:
   1. Multiprocessing in Python (e.g. via the `multiprocessing` or `pyspark`
      libraries). Behind the scenes, each Python process will use ryp to create
      its own dedicated R interpreter, which does not interact with any other
@@ -623,6 +624,17 @@ arrays['floats']
      code. If your R package supports it, this is the fastest and easiest
      option, since it merely requires an environment variable or R one-liner to
      set the number of threads.
+  A key consideration for strategy #1: on Linux and macOS, the default `'fork'`
+  start method is unsafe if you call ryp's core functions (`r()`, `to_py()`, or
+  `to_r()`) in the parent process before forking. This is because each child
+  process inherits an identical copy of R's internal state; since R is not
+  thread-safe, this can lead to deadlocks, corrupted results, or crashes. To
+  prevent these hard-to-debug issues, ryp helpfully detects this condition and
+  raises an error. The fix is to either restructure your code so ryp is only
+  used inside the function being run in parallel, or use a safer start method
+  like `'forkserver'` (recommended) or `'spawn'` (slower), e.g. via
+  `multiprocessing.set_start_method('forkserver', force=True)`. These methods
+  ensure every child process gets its own clean, new R interpreter.
 - On Windows, interactive plotting is blocking: once you open a plot window,
   R will not execute any other code until you close the window. Unfortunately,
   R's C API does not expose the necessary functionality for third-party
