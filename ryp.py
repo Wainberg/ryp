@@ -128,12 +128,11 @@ def _initialize_ryp() -> None:
     current_PID = os.getpid()
     if _ryp_PID is not None and _ryp_PID != current_PID:
         error_message = (
-            "r(), to_py() and to_r() cannot be called in a forked "
-            "process if any of them were called in the parent "
-            "process prior to forking; as discussed in the README, "
-            "either switch to the 'forkserver' or 'spawn' "
-            "multiprocessing backends, or avoid using ryp outside "
-            "the parallel part of your code")
+            "r(), to_py() and to_r() cannot be called in a forked process if "
+            "any of them were called in the parent process prior to forking; "
+            "as discussed in the README, either switch to the 'forkserver' or "
+            "'spawn' multiprocessing backends, or avoid using ryp outside the "
+            "parallel part of your code")
         raise RuntimeError(error_message)
     # Use double-checked locking when deciding whether to initialize
     if _rlib is None:
@@ -374,6 +373,14 @@ def _initialize_ryp() -> None:
                 r(f'q = quit = function(...) {{ cat("Press '
                   f'{_EOF_instructions} to exit the Python terminal, or run '
                   f'exit()\n") }}; options(arrow.int64_downcast = FALSE)')
+                if platform.system() == 'Windows' and \
+                        not to_py('l10n_info()$`UTF-8`'):
+                    # On Windows, UTF-8 is usually not R's default encoding.
+                    # English_United States.65001 is the most reliable way to
+                    # specify UTF-8 in this scenario.
+                    r('invisible(suppressWarnings(try({ '
+                      'Sys.setlocale("LC_ALL", "English_United States.65001") '
+                      '}, silent = TRUE)))')
                 # If inside a Jupyter notebook, set up inline plotting
                 try:
                     ipython = get_ipython()
@@ -1458,7 +1465,7 @@ def r(R_code: str = ...) -> None:
                     -1, status, _rlib.R_NilValue)  # reparse without autoprint
             parse_error_message = \
                 _ffi.string(_rlib.R_ParseErrorMsg).decode('utf-8')
-            # The code snipped that triggered the syntax error is stored in a
+            # The code snippet that triggered the syntax error is stored in a
             # circular buffer that stretches back from `R_ParseContextLast` to
             # the first null byte, wrapping around to the end of the buffer if
             # the beginning of the buffer is reached before finding a null byte
