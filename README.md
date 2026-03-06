@@ -607,11 +607,12 @@ arrays['floats']
 ## Limitations
 
 - The R interpreter is not thread-safe, so ryp can't be used by multiple Python
-  threads simultaneously. (This limitation is shared by rpy2.) Within a given
-  Python process, only the first Python thread to call one of ryp's core
-  functions (`r()`, `to_py()`, or `to_r()`) is ever allowed to call them going
-  forward; trying to call them later from other Python threads will raise an
-  error. If you need parallelism, you will need to use one of the following:
+  threads simultaneously. (This limitation is shared by rpy2.) ryp's core
+  functions (`r()`, `to_py()`, or `to_r()`) use a lock internally to ensure
+  that only one thread at a time can use the R interpreter. This design ensures
+  thread-safety while still allowing ryp to be used seamlessly with packages
+  like JAX that use background threads to manage computation. If you need
+  parallelism, you will need to use one of the following:
   1. Multiprocessing in Python (e.g. via the `multiprocessing` or `pyspark`
      libraries). Behind the scenes, each Python process will use ryp to create
      its own dedicated R interpreter, which does not interact with any other
