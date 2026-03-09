@@ -390,7 +390,9 @@ def _initialize_ryp() -> None:
                         if not _require(b'svglite', rmemory):
                             error_message = (
                                 'please install the svglite R package to use '
-                                'inline plotting in Jupyter notebooks')
+                                'inline plotting in Jupyter notebooks, for '
+                                'instance by running `from ryp import r; '
+                                'r(\'install.packages("svglite")\')`')
                             raise ImportError(error_message)
                     # Make a custom plotting device that saves each plot to a
                     # temp file as SVG
@@ -1765,7 +1767,10 @@ def to_r(python_object: Any, R_variable_name: str, *,
         if top_level:
             # Require arrow
             if not _require(b'arrow', rmemory):
-                error_message = 'please install the arrow R package to use ryp'
+                error_message = (
+                    'please install the arrow R package to use ryp, for '
+                    'instance by running `from ryp import r; '
+                    'r(\'install.packages("arrow")\')`')
                 raise ImportError(error_message)
         # If format is not None, and we are not recursing, raise an error if
         # python_object is anything but a DataFrame, MultiIndex, matrix (2D
