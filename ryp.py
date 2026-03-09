@@ -23,11 +23,11 @@ class ignore_sigint:
     incomplete imports.
     """
     def __enter__(self):
-        if _main_thread:
+        if threading.current_thread() is threading.main_thread():
             signal.signal(signal.SIGINT, signal.SIG_IGN)
     
     def __exit__(self, *_):
-        if _main_thread:
+        if threading.current_thread() is threading.main_thread():
             signal.signal(signal.SIGINT, signal.default_int_handler)
 
 
@@ -122,7 +122,7 @@ def _initialize_ryp() -> None:
     
     Based on the rpy2.rinterface_lib.embedded._initr() function.
     """
-    global _ffi, _rlib, _ryp_PID, _main_thread, _jupyter_notebook
+    global _ffi, _rlib, _ryp_PID, _jupyter_notebook
     # Disallow running ryp from a forked process if it has already been
     # initialized in the parent process
     current_PID = os.getpid()
@@ -352,9 +352,7 @@ def _initialize_ryp() -> None:
                 # initialization. If not on the main thread, KeyboardInterrupts
                 # cannot be disabled due to the limitations of Python's signal
                 # module, so skip this step.
-                _main_thread = \
-                    threading.current_thread() is threading.main_thread()
-                if _main_thread:
+                if threading.current_thread() is threading.main_thread():
                     signal.signal(signal.SIGINT, signal.SIG_IGN)
                 # Also disable R's internal signal handlers; without this line,
                 # if the user triggers a KeyboardInterrupt before the module is
@@ -430,7 +428,7 @@ def _initialize_ryp() -> None:
                 # would still be necessary even if we had not installed a
                 # custom signal handler above, since Ctrl + C would not work
                 # after setup_Rmainloop() otherwise.)
-                if _main_thread:
+                if threading.current_thread() is threading.main_thread():
                     signal.signal(signal.SIGINT, signal.default_int_handler)
 
 
@@ -1354,7 +1352,7 @@ def r(R_code: str = ...) -> None:
     with _R_lock:
         if R_code is ...:
             # Only allow on the main thread
-            if not _main_thread:
+            if threading.current_thread() is not threading.main_thread():
                 error_message = (
                     'opening an R terminal with r() is only allowed on the '
                     'main thread')
