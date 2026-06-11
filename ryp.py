@@ -93,10 +93,14 @@ def _get_R_home_and_rlib_path() -> tuple[str, str]:
                 f'variable since it seems to be misconfigured.')
             warnings.warn(warning_message, RuntimeWarning)
     
-    # If R_HOME is not defined or misconfigured, fall back to running `R RHOME`
+    # If R_HOME is not defined or misconfigured, fall back to running
+    # `R RHOME`. Remove the environment variable `R_HOME` before running
+    # (`env -u R_HOME`), to stop R from emitting "WARNING: ignoring environment
+    # value of R_HOME".
     try:
-        R_home = subprocess.run('R RHOME', shell=True, capture_output=True,
-                                check=True, text=True).stdout.rstrip()
+        R_home = subprocess.run('env -u R_HOME R RHOME', shell=True,
+                                capture_output=True, check=True,
+                                text=True).stdout.rstrip()
     except subprocess.CalledProcessError as e:
         error_message = (
             "the command 'R RHOME' did not run successfully, so the R "
