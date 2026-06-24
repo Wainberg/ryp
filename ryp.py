@@ -94,13 +94,15 @@ def _get_R_home_and_rlib_path() -> tuple[str, str]:
             warnings.warn(warning_message, RuntimeWarning)
     
     # If R_HOME is not defined or misconfigured, fall back to running
-    # `R RHOME`. Remove the environment variable `R_HOME` before running
-    # (`env -u R_HOME`), to stop R from emitting "WARNING: ignoring environment
-    # value of R_HOME".
+    # `R RHOME`. On non-Windows systems, remove the environment variable
+    # `R_HOME` before running (`env -u R_HOME`), to stop R from emitting
+    # "WARNING: ignoring environment value of R_HOME". (This warning is not
+    # emitted on Windows.)
     try:
-        R_home = subprocess.run('env -u R_HOME R RHOME', shell=True,
-                                capture_output=True, check=True,
-                                text=True).stdout.rstrip()
+        command = 'R RHOME' if platform.system() == 'Windows' else \
+            'env -u R_HOME R RHOME'
+        R_home = subprocess.run(command, shell=True, capture_output=True,
+                                check=True, text=True).stdout.rstrip()
     except subprocess.CalledProcessError as e:
         error_message = (
             "the command 'R RHOME' did not run successfully, so the R "
@@ -339,9 +341,9 @@ def _initialize_ryp() -> None:
                 R_home, rlib_path = _get_R_home_and_rlib_path()
                 # Load the .so file
                 if platform.system() == 'Windows':
-                    # Add the directory containing the R DLL to the PATH, to
-                    # work around github.com/python-cffi/cffi/issues/64
-                    os.environ['PATH'] += f';{os.path.dirname(rlib_path)}'
+                    # Add the directory containing the R DLL to the PATH
+                    os.environ['PATH'] = \
+                        f'{os.path.dirname(rlib_path)};{os.environ["PATH"]}'
                 _rlib = _ffi.dlopen(rlib_path)
                 # Error out if R has already been initialized (e.g. by rpy2)
                 if _rlib.R_NilValue != _ffi.NULL:
