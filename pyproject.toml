@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ryp"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = ["cffi", "pyarrow"]
 requires-python = ">=3.8"
 authors = [{name = "Michael Wainberg", email = "m.wainberg@utoronto.ca"}]
@@ -23,6 +23,7 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Scientific/Engineering",
   "Topic :: Software Development",
 ]
