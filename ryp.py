@@ -2,6 +2,7 @@ from __future__ import annotations
 import cffi
 import _cffi_backend
 import datetime
+import glob
 import numpy as np
 import os
 import platform
@@ -14,7 +15,7 @@ import warnings
 from typing import Any, Literal
 
 
-__version__ = '0.3.0'
+__version__ = '0.4.0'
 
 
 class ignore_sigint:
@@ -25,7 +26,7 @@ class ignore_sigint:
     def __enter__(self):
         if threading.current_thread() is threading.main_thread():
             signal.signal(signal.SIGINT, signal.SIG_IGN)
-    
+
     def __exit__(self, *_):
         if threading.current_thread() is threading.main_thread():
             signal.signal(signal.SIGINT, signal.default_int_handler)
@@ -34,12 +35,12 @@ class ignore_sigint:
 def _get_rlib_path(R_home: str) -> str:
     """
     Get the path to the R shared library.
-    
+
     Based on the rpy2.situation.get_rlib_path() function.
-    
+
     Args:
         R_home: the path to the R home directory
-    
+
     Returns:
         The path to the R shared library.
     """
@@ -58,10 +59,10 @@ def _get_R_home_and_rlib_path() -> tuple[str, str]:
     Get R's home directory, first by checking the environment variable R_HOME,
     then (if not defined or misconfigured) by running `R RHOME`. Also get the
     path to the R shared library.
-    
+
     Based on the rpy2.situation.get_rlib_path() and rpy2.situation.get_r_home()
     functions.
-    
+
     Returns:
         The R home directory and the path to the R shared library.
     """
@@ -92,7 +93,7 @@ def _get_R_home_and_rlib_path() -> tuple[str, str]:
                 f'not exist: {R_home}. You may want to unset this environment '
                 f'variable since it seems to be misconfigured.')
             warnings.warn(warning_message, RuntimeWarning)
-    
+
     # If R_HOME is not defined or misconfigured, fall back to running
     # `R RHOME`. On non-Windows systems, remove the environment variable
     # `R_HOME` before running (`env -u R_HOME`), to stop R from emitting
@@ -125,7 +126,7 @@ def _get_R_home_and_rlib_path() -> tuple[str, str]:
 def _initialize_ryp() -> None:
     """
     Initialize ryp, if not already initialized.
-    
+
     Based on the rpy2.rinterface_lib.embedded._initr() function.
     """
     global _ffi, _rlib, _ryp_PID, _jupyter_notebook
@@ -339,12 +340,146 @@ def _initialize_ryp() -> None:
                 _ffi.cdef(R_header)
                 # Get the R home directory and shared object (.so/.dll) file
                 R_home, rlib_path = _get_R_home_and_rlib_path()
-                # Load the .so file
+                # Load the shared library. On non-Windows systems, dlopening
+                # libR makes the dynamic linker resolve R's own C-level
+                # dependencies (e.g. libicuuc.so, the gcc runtime). When R was
+                # compiled against libraries in nonstandard locations (such as
+                # a computing cluster module) and is loaded from a foreign
+                # Python (such as a conda environment), the linker inherits
+                # Python's restricted search paths and cannot see the
+                # directories where R's dependencies live, so the load fails
+                # with an OSError like "cannot load library '.../libR.so':
+                # libicuuc.so.73: cannot open shared object file: No such file
+                # or directory". Setting LD_LIBRARY_PATH here would not help,
+                # since glibc reads it only once, at process startup.
+                #
+                # On non-Windows systems we therefore load libR with
+                # RTLD_GLOBAL (so its symbols Rf_eval, Rf_protect, ... are
+                # visible to R packages that later dyn.load() their own shared
+                # objects, which would otherwise fail with "undefined symbol"),
+                # and, should that load fail because a dependency is missing,
+                # preload the missing dependencies ourselves before retrying,
+                # locating them in the directories R's own launcher would put
+                # on LD_LIBRARY_PATH. Already-loaded libraries are reused by
+                # soname, so once a dependency is resident the linker satisfies
+                # it from memory without searching the filesystem.
                 if platform.system() == 'Windows':
                     # Add the directory containing the R DLL to the PATH
                     os.environ['PATH'] = \
                         f'{os.path.dirname(rlib_path)};{os.environ["PATH"]}'
-                _rlib = _ffi.dlopen(rlib_path)
+                    _rlib = _ffi.dlopen(rlib_path)
+                else:
+                    flags = _ffi.RTLD_LAZY | _ffi.RTLD_GLOBAL
+                    try:
+                        # Fast path: on a healthy install the linker finds
+                        # libR's dependencies on its own, so this single load
+                        # succeeds and all the dependency-resolution work below
+                        # is skipped (in particular, no subprocesses are run).
+                        _rlib = _ffi.dlopen(rlib_path, flags)
+                    except OSError:
+                        # Slow path: a dependency could not be found. Discover
+                        # the directories R's launcher would put on
+                        # LD_LIBRARY_PATH: R_HOME/lib plus any extra directories
+                        # baked in at build time (e.g. the cluster's ICU and
+                        # gcc runtime). Source R's etc/ldpaths shell fragment
+                        # with sh, which expands its shell variables correctly
+                        # and returns in a few milliseconds; if that fails, ask
+                        # R itself, which is correct but slower; if both fail,
+                        # fall back to R_HOME/lib alone, which suffices for a
+                        # standard install.
+                        try:
+                            r_env = {**os.environ, 'R_HOME': R_home}
+                            ldpaths = os.path.join(R_home, 'etc', 'ldpaths')
+                            if not os.path.exists(ldpaths):
+                                ldpaths = os.path.join(
+                                    R_home, 'etc', platform.machine(),
+                                    'ldpaths')
+                            ld_library_path = None
+                            if os.path.exists(ldpaths):
+                                try:
+                                    ld_library_path = subprocess.run(
+                                        ['sh', '-c', f'. "{ldpaths}"; printf '
+                                         f'%s "$R_LD_LIBRARY_PATH"'],
+                                        capture_output=True, text=True,
+                                        check=True, env=r_env).stdout
+                                except Exception:
+                                    pass
+                            if ld_library_path is None:
+                                ld_library_path = subprocess.run(
+                                    [os.path.join(R_home, 'bin', 'R'),
+                                     '--vanilla', '--no-echo', '-e',
+                                     'cat(Sys.getenv("LD_LIBRARY_PATH"))'],
+                                    capture_output=True, text=True, check=True,
+                                    env=r_env).stdout
+                        except Exception:
+                            ld_library_path = ''
+                        # Combine, drop duplicates while preserving order, and
+                        # keep only real directories
+                        ld_dirs = [os.path.join(R_home, 'lib')] + \
+                            ld_library_path.split(os.pathsep) + \
+                            os.environ.get(
+                                'LD_LIBRARY_PATH', '').split(os.pathsep)
+                        ld_dirs = [d for d in dict.fromkeys(ld_dirs)
+                                   if d and os.path.isdir(d)]
+                        # Load libR, preloading missing dependencies as they
+                        # are reported and retrying. `pending` is a stack of
+                        # libraries to preload first (a dependency may itself
+                        # have a missing dependency); when it is empty we
+                        # (re)attempt libR. Preloaded dependencies are held in
+                        # `preloaded` only until libR loads: afterward _rlib
+                        # keeps libR resident and libR keeps its dependencies
+                        # resident via their NEEDED entries. The `resolving`
+                        # set breaks the loop if a library cannot be found or
+                        # its name cannot be parsed, re-raising the original
+                        # OSError so a genuinely broken install still provides
+                        # a clear error. The first iteration reproduces the
+                        # failure just caught, which is what identifies the
+                        # first missing dependency.
+                        preloaded = []
+                        pending = []
+                        resolving = set()
+                        _rlib = None
+                        while _rlib is None:
+                            try:
+                                if pending:
+                                    preloaded.append(
+                                        _ffi.dlopen(pending[-1], flags))
+                                    pending.pop()
+                                else:
+                                    _rlib = _ffi.dlopen(rlib_path, flags)
+                            except OSError as load_error:
+                                # Pull the unresolved library name out of the
+                                # error, e.g. "libicuuc.so.73: cannot open
+                                # shared object file" (or the macOS phrasing)
+                                message = str(load_error)
+                                match = re.search(
+                                    r'([\w.+-]+\.so[\w.]*): cannot open '
+                                    r'shared object', message) or re.search(
+                                    r'Library not loaded:.*?'
+                                    r'([\w.+-]+\.dylib)', message)
+                                soname = match.group(1) if match else None
+                                if soname is None or soname in resolving:
+                                    raise
+                                # Find it by soname, first exactly across all
+                                # dirs, then by a versioned filename (e.g.
+                                # libicuuc.so.73.1)
+                                dep_path = None
+                                for d in ld_dirs:
+                                    exact = os.path.join(d, soname)
+                                    if os.path.exists(exact):
+                                        dep_path = exact
+                                        break
+                                if dep_path is None:
+                                    for d in ld_dirs:
+                                        versioned = sorted(glob.glob(
+                                            os.path.join(d, soname + '*')))
+                                        if versioned:
+                                            dep_path = versioned[0]
+                                            break
+                                if dep_path is None:
+                                    raise
+                                resolving.add(soname)
+                                pending.append(dep_path)
                 # Error out if R has already been initialized (e.g. by rpy2)
                 if _rlib.R_NilValue != _ffi.NULL:
                     error_message = (
