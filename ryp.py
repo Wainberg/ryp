@@ -12,10 +12,13 @@ import subprocess
 import sys
 import threading
 import warnings
+from importlib.metadata import version, PackageNotFoundError
 from typing import Any, Literal
 
-
-__version__ = '0.4.0'
+try:
+    __version__ = version('ryp')
+except PackageNotFoundError:
+    __version__ = '0.0.0+unknown'
 
 
 class ignore_sigint:
